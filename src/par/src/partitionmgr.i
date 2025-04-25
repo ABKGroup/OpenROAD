@@ -315,6 +315,12 @@ void write_partition_verilog(
       file_name, port_prefix, module_suffix);
 }
 
+void convert_netlist_to_hypergraph(
+  const char* hypergraph_file) 
+{
+  getPartitionMgr()->tritonPartWriteHypergraph(hypergraph_file);
+}
+
 void read_file(const char* filename, const char* instance_map_file)
 {
   getPartitionMgr()->readPartitioningFile(filename, instance_map_file);

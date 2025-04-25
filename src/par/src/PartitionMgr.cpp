@@ -71,6 +71,212 @@ void PartitionMgr::init(odb::dbDatabase* db,
   logger_ = logger;
 }
 
+
+
+void PartitionMgr::updateInstLocation(const char* placement_file)
+{
+  std::vector<std::string> inst_names;
+  std::vector<std::pair<float, float> > inst_locs;
+  auto block_ = db_->getChip()->getBlock(); 
+  const int dbu = db_->getTech()->getDbUnitsPerMicron();
+
+  // read the placement file
+  std::ifstream file_input(placement_file);
+  if (!file_input.is_open()) {
+    logger_->error(PAR, 14, "Cannot open placement file: %s", placement_file);
+    return;
+  }
+
+  std::string line;
+  while (std::getline(file_input, line)) {
+    std::istringstream iss(line);
+    std::string inst_name;
+    float x, y;
+    if (!(iss >> inst_name >> x >> y)) {
+      logger_->error(PAR, 16, "Invalid placement file format: %s", line.c_str());
+      continue;
+    }
+    inst_names.push_back(inst_name);
+    inst_locs.push_back(std::make_pair(x * dbu, y * dbu));
+  }
+
+  file_input.close();
+
+
+  // get the core area
+  odb::Rect core_area = block_->getCoreArea();
+  int core_area_xmin = core_area.xMin();
+  int core_area_ymin = core_area.yMin();
+  int core_area_xmax = core_area.xMax();
+  int core_area_ymax = core_area.yMax();
+  int num_insts = inst_names.size();
+  for (int inst_id = 0; inst_id < num_insts; inst_id++) {
+    odb::dbInst* inst = block_->findInst(inst_names[inst_id].c_str());
+    if (inst == nullptr) {
+      continue;
+    }
+    odb::dbBox* box = inst->getBBox();
+    int x = (box->xMin() + box->xMax()) / 2;
+    int y = (box->yMin() + box->yMax()) / 2;
+    if (x < core_area_xmin || x > core_area_xmax || y < core_area_ymin
+        || y > core_area_ymax) {
+      continue;
+    }
+    inst->setLocation(x, y);
+  }
+}
+
+
+// This function is used to convert the netlist into a hypergraph
+void PartitionMgr::tritonPartWriteHypergraph(const char* hypergraph_file)
+{
+  std::vector<float> vertex_area_vec;
+  std::vector<std::string> vertex_type_vec;
+  std::vector<std::string> vertex_name_vec;
+  std::vector<bool> vertex_fixed_vec;
+  std::vector<std::pair<float, float>> vertex_loc_vec;
+  
+  auto block_ = db_->getChip()->getBlock();
+  // traverse all the instances
+  int vertex_id = 0;
+  
+  for (auto term : block_->getBTerms()) {
+    odb::dbIntProperty::create(term, "vertex_id", vertex_id++);
+    vertex_type_vec.push_back(std::string("IO"));
+    vertex_area_vec.push_back(0.0);
+    vertex_name_vec.push_back(term->getName());
+    vertex_fixed_vec.push_back(true);  
+    odb::Rect box = term->getBBox();
+    float x = (box.xMin() + box.xMax()) / 2.0f;
+    float y = (box.yMin() + box.yMax()) / 2.0f;
+    vertex_loc_vec.push_back(std::make_pair(x, y));        
+  }
+
+  for (auto inst : block_->getInsts()) {
+    // -1 means that the instance is not used by the partitioner
+    odb::dbIntProperty::create(inst, "vertex_id", -1);
+    const sta::LibertyCell* liberty_cell = db_network_->libertyCell(inst);
+    if (liberty_cell == nullptr) {
+      continue;  // ignore the instance with no liberty
+    }
+      
+    odb::dbMaster* master = inst->getMaster();
+    // check if the instance is a pad or a cover macro
+    if (master->isPad() || master->isCover()) {
+      continue;
+    }
+
+    const float area = inst->getMaster()->getArea();
+    vertex_area_vec.push_back(area);
+    if (master->isBlock()) {
+      vertex_type_vec.push_back(std::string("MACRO"));
+    } else {
+      vertex_type_vec.push_back(std::string("STD_CELL"));
+    }
+    
+    odb::dbIntProperty::find(inst, "vertex_id")->setValue(vertex_id++);
+    if (inst->isFixed() == true) {
+      vertex_fixed_vec.push_back(true);
+      odb::dbBox* box = inst->getBBox();
+      float x = (box->xMin() + box->xMax()) / 2.0f;
+      float y = (box->yMin() + box->yMax()) / 2.0f;
+      vertex_loc_vec.push_back(std::make_pair(x, y));
+    } else {
+      vertex_fixed_vec.push_back(false);
+      vertex_loc_vec.push_back(std::make_pair(0.0, 0.0));
+    }
+    
+    vertex_name_vec.push_back(inst->getName());
+  }
+
+  std::vector<std::vector<int> > hyperedges;
+  // Each net correponds to an hyperedge
+  // Traverse the hyperedge and assign hyperedge_id to each net
+  // the hyperedge_id property will be removed after partitioning
+  int hyperedge_id = 0;
+  for (auto net : block_->getNets()) {
+    odb::dbIntProperty::create(net, "hyperedge_id", -1);
+    // ignore all the power net
+    if (net->getSigType().isSupply()) {
+      continue;
+    }
+    // check the hyperedge
+    int driver_id = -1;      // vertex id of the driver instance
+    std::set<int> loads_id;  // vertex id of sink instances
+    // check the connected instances
+    for (odb::dbITerm* iterm : net->getITerms()) {
+      odb::dbInst* inst = iterm->getInst();
+      const int vertex_id
+          = odb::dbIntProperty::find(inst, "vertex_id")->getValue();
+      if (vertex_id == -1) {
+        continue;  // the current instance is not used
+      }
+      if (iterm->getIoType() == odb::dbIoType::OUTPUT) {
+        driver_id = vertex_id;
+      } else {
+        loads_id.insert(vertex_id);
+      }
+    }
+    // check the connected IO pins
+    for (odb::dbBTerm* bterm : net->getBTerms()) {
+      const int vertex_id
+          = odb::dbIntProperty::find(bterm, "vertex_id")->getValue();
+      if (vertex_id == -1) {
+        continue;  // the current bterm is not used
+      }
+      if (bterm->getIoType() == odb::dbIoType::INPUT) {
+        driver_id = vertex_id;
+      } else {
+        loads_id.insert(vertex_id);
+      }
+    }
+    // check the hyperedges
+    std::vector<int> hyperedge;
+    if (driver_id != -1 && !loads_id.empty()) {
+      hyperedge.push_back(driver_id);
+      for (auto& load_id : loads_id) {
+        if (load_id != driver_id) {
+          hyperedge.push_back(load_id);
+        }
+      }
+    }
+    // Ignore all the single-vertex hyperedge and large global netthreshold
+    // if (hyperedge.size() > 1 && hyperedge.size() <= global_net_threshold_) {
+    if (hyperedge.size() > 1) {
+      hyperedges.push_back(hyperedge);
+      odb::dbIntProperty::find(net, "hyperedge_id")->setValue(hyperedge_id++);
+    }
+  }  // finish hyperedge
+  
+  int numVertices = vertex_area_vec.size();
+  int numHyperedges = hyperedges.size();
+
+
+  std::ofstream file_output;
+  file_output.open(hypergraph_file);
+  file_output << "Number of vertices: " << numVertices << std::endl;
+  file_output << "Number of hyperedges: " << numHyperedges << std::endl;
+  file_output << "hyperedges: driver_id load_id1 load_id2 ..." << std::endl;
+  for (auto& hyperedge: hyperedges) {
+    for (auto& vertex_id : hyperedge) {
+      file_output << vertex_id << " ";
+    }
+    file_output << std::endl;
+  }
+  file_output << "vertex_id area type vertex_name is_fixed x y" << std::endl;
+  for (int i = 0; i < numVertices; i++) {
+    file_output << i << " " 
+                << vertex_area_vec[i] << " "
+                << vertex_type_vec[i] << " " 
+                << vertex_name_vec[i] << " "
+                << vertex_fixed_vec[i] << " " 
+                << vertex_loc_vec[i].first << " " 
+                << vertex_loc_vec[i].second << std::endl;
+  }
+  file_output.close();
+}
+
+
 // The function for partitioning a hypergraph
 // This is used for replacing hMETIS
 // Key supports:

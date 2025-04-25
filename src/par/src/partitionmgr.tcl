@@ -1001,3 +1001,16 @@ proc read_partitioning { args } {
   }
   return [par::read_file $keys(-read_file) $instance_file]
 }
+
+
+proc convert_netlist_to_hypergraph { args } {
+  sta::parse_key_args "convert_netlist_to_hypergraph" args \
+    keys { -hypergraph_file  } flags { }
+
+  if { ![info exists keys(-hypergraph_file)] } {
+    utl::error PAR 53 "Missing mandatory argument -hypergraph_file"
+  }
+
+  set hypergraph_file $keys(-hypergraph_file)
+  return [par::convert_netlist_to_hypergraph $hypergraph_file]
+}

@@ -55,6 +55,10 @@ class PartitionMgr
             sta::dbSta* sta,
             utl::Logger* logger);
 
+
+  void tritonPartWriteHypergraph(const char* hypergraph_file);
+  void updateInstLocation(const char* placement_file);
+  
   // The function for partitioning a hypergraph
   // This is used for replacing hMETIS
   // Key supports:
