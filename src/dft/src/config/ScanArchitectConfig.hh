@@ -20,7 +20,20 @@ class ScanArchitectConfig
     ClockMix  // We architect the flops of different clock and edge together
   };
 
+  // Metric used for ordering scan cells within each scan chain.
+  enum class ScanOrderMetric
+  {
+    Placement,  // Placement-based Manhattan (cell-to-cell)
+    PinToNet    // Routing-aware incremental cost (pin-to-net)
+  };
+
   void setClockMixing(ClockMixing clock_mixing);
+
+  // The exact number of scan chains to generate (per clock-edge pair in NoMix,
+  // total in ClockMix). When set, this takes priority over max_length/max_chains
+  // inference.
+  void setChainCount(uint64_t chain_count);
+  const std::optional<uint64_t>& getChainCount() const;
 
   // The max length in bits that a scan chain can have
   void setMaxLength(uint64_t max_length);
@@ -32,12 +45,19 @@ class ScanArchitectConfig
 
   ClockMixing getClockMixing() const;
 
+  void setScanOrderMetric(ScanOrderMetric metric);
+  ScanOrderMetric getScanOrderMetric() const;
+
   // Prints using logger->report the config used by Scan Architect
   void report(utl::Logger* logger) const;
 
   static std::string ClockMixingName(ClockMixing clock_mixing);
+  static std::string ScanOrderMetricName(ScanOrderMetric metric);
 
  private:
+  // Exact number of chains to generate.
+  std::optional<uint64_t> chain_count_;
+
   // The max length in bits of the scan chain
   std::optional<uint64_t> max_length_;
   // The max number of chains to generate
@@ -45,6 +65,9 @@ class ScanArchitectConfig
 
   // How we are going to mix the clocks of the scan cells
   ClockMixing clock_mixing_;
+
+  // How we order scan cells within each chain.
+  ScanOrderMetric scan_order_metric_{ScanOrderMetric::Placement};
 };
 
 }  // namespace dft

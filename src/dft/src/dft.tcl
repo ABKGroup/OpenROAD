@@ -43,8 +43,10 @@ proc execute_dft_plan { args } {
 }
 
 sta::define_cmd_args "set_dft_config" { [-max_length max_length]
+                                        [-chain_count chain_count]
                                         [-max_chains max_chains]
                                         [-clock_mixing clock_mixing]
+                                        [-scan_order_metric scan_order_metric]
                                         [-scan_enable_name_pattern scan_enable_name_pattern]
                                         [-scan_in_name_pattern scan_in_name_pattern]
                                         [-scan_out_name_pattern scan_out_name_pattern]
@@ -53,8 +55,10 @@ proc set_dft_config { args } {
   sta::parse_key_args "set_dft_config" args \
     keys {
       -max_length
+      -chain_count
       -max_chains
       -clock_mixing
+      -scan_order_metric
       -scan_enable_name_pattern
       -scan_in_name_pattern
       -scan_out_name_pattern
@@ -69,6 +73,12 @@ proc set_dft_config { args } {
     dft::set_dft_config_max_length $max_length
   }
 
+  if { [info exists keys(-chain_count)] } {
+    set chain_count $keys(-chain_count)
+    sta::check_positive_integer "-chain_count" $chain_count
+    dft::set_dft_config_chain_count $chain_count
+  }
+
   if { [info exists keys(-max_chains)] } {
     set max_chains $keys(-max_chains)
     sta::check_positive_integer "-max_chains" $max_chains
@@ -78,6 +88,11 @@ proc set_dft_config { args } {
   if { [info exists keys(-clock_mixing)] } {
     set clock_mixing $keys(-clock_mixing)
     dft::set_dft_config_clock_mixing $clock_mixing
+  }
+
+  if { [info exists keys(-scan_order_metric)] } {
+    set metric $keys(-scan_order_metric)
+    dft::set_dft_config_scan_order_metric $metric
   }
 
   foreach {flag signal} {

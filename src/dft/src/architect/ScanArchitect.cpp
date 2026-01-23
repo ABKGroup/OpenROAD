@@ -135,8 +135,81 @@ void ScanArchitect::inferChainCount()
   std::unordered_map<size_t, uint64_t> hash_domains_total_bits
       = scan_cells_bucket_->getTotalBitsPerHashDomain();
 
+  utl::Logger* logger = scan_cells_bucket_->getLogger();
+  const auto ceil_div = [](uint64_t num, uint64_t denom) -> uint64_t {
+    return denom == 0 ? 0 : (num + denom - 1) / denom;
+  };
+
+  if (auto chain_count = config_.getChainCount(); chain_count.has_value()) {
+    hash_domain_to_limits_.clear();
+    if (auto max_length = config_.getMaxLength(); max_length.has_value()) {
+      const uint64_t chains = chain_count.value();
+      const uint64_t max_len = max_length.value();
+      for (const auto& [hash_domain, bits] : hash_domains_total_bits) {
+        (void) hash_domain;
+        const uint64_t capacity = chains * max_len;
+        if (capacity != 0 && bits > capacity) {
+          const uint64_t required_max_len = ceil_div(bits, chains);
+          if (logger) {
+            logger->warn(
+                utl::DFT,
+                73,
+                "Scan architect constraints infeasible: total_bits={} exceeds "
+                "chain_count*max_length={}*{} (capacity {}); requires per-chain "
+                "length at least {}.",
+                bits,
+                chains,
+                max_len,
+                capacity,
+                required_max_len);
+          }
+        }
+      }
+    }
+    for (const auto& [hash_domain, bits] : hash_domains_total_bits) {
+      HashDomainLimits hash_domain_limits;
+      hash_domain_limits.chain_count = chain_count.value();
+
+      uint64_t domain_max_length = 0;
+      if (auto max_length = config_.getMaxLength(); max_length.has_value()) {
+        domain_max_length = max_length.value();
+      } else {
+        domain_max_length = ceil_div(bits, hash_domain_limits.chain_count);
+      }
+      hash_domain_limits.max_length = domain_max_length;
+
+      hash_domain_to_limits_.insert({hash_domain, hash_domain_limits});
+    }
+    return;
+  }
+
   if (auto max_length = config_.getMaxLength(); max_length.has_value()) {
     // The user is saying that we should respect this max_length
+    if (auto max_chains = config_.getMaxChains(); max_chains.has_value()) {
+      const uint64_t max_len = max_length.value();
+      const uint64_t max_chain_count = max_chains.value();
+      for (const auto& [hash_domain, bits] : hash_domains_total_bits) {
+        (void) hash_domain;
+        const uint64_t required_chains = ceil_div(bits, max_len);
+        if (max_chain_count != 0 && required_chains > max_chain_count) {
+          const uint64_t implied_max_len = ceil_div(bits, max_chain_count);
+          if (logger) {
+            logger->warn(
+                utl::DFT,
+                74,
+                "Scan architect constraints infeasible: max_length={} requires "
+                "at least {} chains for total_bits={}, but max_chains={} -> "
+                "using {} chains with implied max_length={}.",
+                max_len,
+                required_chains,
+                bits,
+                max_chain_count,
+                max_chain_count,
+                implied_max_len);
+          }
+        }
+      }
+    }
     hash_domain_to_limits_ = inferChainCountFromMaxLength(
         hash_domains_total_bits, max_length.value(), config_.getMaxChains());
   } else {

@@ -67,6 +67,27 @@ utl::Logger* getLogger()
   };
 }
 
+// Enum: dft::ScanArchitectConfig::ScanOrderMetric
+%typemap(typecheck) dft::ScanArchitectConfig::ScanOrderMetric {
+  char *str = Tcl_GetStringFromObj($input, 0);
+  if (strcasecmp(str, "PLACEMENT") == 0) {
+    $1 = 1;
+  } else if (strcasecmp(str, "PIN_TO_NET") == 0) {
+    $1 = 1;
+  } else {
+    $1 = 0;
+  }
+}
+
+%typemap(in) dft::ScanArchitectConfig::ScanOrderMetric {
+  char *str = Tcl_GetStringFromObj($input, 0);
+  if (strcasecmp(str, "PIN_TO_NET") == 0) {
+    $1 = dft::ScanArchitectConfig::ScanOrderMetric::PinToNet;
+  } else /* other values eliminated in typecheck */ {
+    $1 = dft::ScanArchitectConfig::ScanOrderMetric::Placement;
+  };
+}
+
 %inline
 %{
 
@@ -90,6 +111,11 @@ void set_dft_config_max_length(int max_length)
   getDft()->getMutableDftConfig()->getMutableScanArchitectConfig()->setMaxLength(max_length);
 }
 
+void set_dft_config_chain_count(int chain_count)
+{
+  getDft()->getMutableDftConfig()->getMutableScanArchitectConfig()->setChainCount(chain_count);
+}
+
 void set_dft_config_max_chains(int max_chains)
 {
   getDft()->getMutableDftConfig()->getMutableScanArchitectConfig()->setMaxChains(max_chains);
@@ -98,6 +124,11 @@ void set_dft_config_max_chains(int max_chains)
 void set_dft_config_clock_mixing(dft::ScanArchitectConfig::ClockMixing clock_mixing)
 {
   getDft()->getMutableDftConfig()->getMutableScanArchitectConfig()->setClockMixing(clock_mixing);
+}
+
+void set_dft_config_scan_order_metric(dft::ScanArchitectConfig::ScanOrderMetric metric)
+{
+  getDft()->getMutableDftConfig()->getMutableScanArchitectConfig()->setScanOrderMetric(metric);
 }
 
 void set_dft_config_scan_signal_name_pattern(const char* signal_ptr, const char* pattern_ptr) {
