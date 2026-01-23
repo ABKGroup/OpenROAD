@@ -14,9 +14,12 @@
 #include <vector>
 
 #include "ClockDomain.hh"
+#include "ScanCell.hh"
 #include "boost/geometry/geometries/register/point.hpp"
 #include "boost/geometry/geometry.hpp"
 #include "boost/geometry/index/rtree.hpp"
+#include "odb/dbShape.h"
+#include "odb/geom.h"
 #include "utl/Logger.h"
 
 namespace bg = boost::geometry;
@@ -25,6 +28,8 @@ namespace bgi = boost::geometry::index;
 namespace dft {
 
 namespace {
+constexpr int64_t kInfDistance = std::numeric_limits<int64_t>::max() / 8;
+
 // Manhattan nearest-neighbor scan (O(n^2)) is exact but quadratic; keep it for
 // moderately sized chains.
 constexpr std::size_t kQuadraticHeuristicMaxCells = 10000;
@@ -40,9 +45,251 @@ constexpr std::size_t kTwoOptMaxCellsFor2Passes = 8000;
 constexpr std::size_t kTwoOptMaxCellsFor3Passes = 4000;
 
 constexpr std::size_t kFarthestInsertionMaxCells = kQuadraticHeuristicMaxCells;
+
+int64_t manhattanDist(const odb::Point& a, const odb::Point& b)
+{
+  const int64_t dx = static_cast<int64_t>(a.x()) - static_cast<int64_t>(b.x());
+  const int64_t dy = static_cast<int64_t>(a.y()) - static_cast<int64_t>(b.y());
+  return std::abs(dx) + std::abs(dy);
+}
+
+int64_t manhattanPointToRectDist(const odb::Point& p, const odb::Rect& r)
+{
+  int64_t dx = 0;
+  if (p.x() < r.xMin()) {
+    dx = static_cast<int64_t>(r.xMin()) - p.x();
+  } else if (p.x() > r.xMax()) {
+    dx = static_cast<int64_t>(p.x()) - r.xMax();
+  }
+
+  int64_t dy = 0;
+  if (p.y() < r.yMin()) {
+    dy = static_cast<int64_t>(r.yMin()) - p.y();
+  } else if (p.y() > r.yMax()) {
+    dy = static_cast<int64_t>(p.y()) - r.yMax();
+  }
+  return dx + dy;
+}
+
+odb::Point scanPinLocation(const ScanPin& pin, const odb::Point& fallback)
+{
+  return std::visit(
+      overloaded{[&](odb::dbITerm* iterm) -> odb::Point {
+                   if (iterm == nullptr) {
+                     return fallback;
+                   }
+                   int x = 0;
+                   int y = 0;
+                   if (iterm->getAvgXY(&x, &y)) {
+                     return odb::Point(x, y);
+                   }
+                   odb::dbInst* inst = iterm->getInst();
+                   return inst ? inst->getLocation() : fallback;
+                 },
+                 [&](odb::dbBTerm* bterm) -> odb::Point {
+                   if (bterm == nullptr) {
+                     return fallback;
+                   }
+                   int x = 0;
+                   int y = 0;
+                   if (bterm->getFirstPinLocation(x, y)) {
+                     return odb::Point(x, y);
+                   }
+                   return fallback;
+                 }},
+      pin.getValue());
+}
+
+struct NetAccessGeometry
+{
+  std::vector<odb::Rect> boxes;
+  std::vector<odb::Point> terminals;
+};
+
+NetAccessGeometry buildNetAccessGeometry(odb::dbNet* net)
+{
+  NetAccessGeometry geom;
+  if (net == nullptr) {
+    return geom;
+  }
+
+  for (odb::dbGuide* guide : net->getGuides()) {
+    geom.boxes.push_back(guide->getBox());
+  }
+
+  if (geom.boxes.empty()) {
+    if (odb::dbWire* wire = net->getWire()) {
+      odb::dbWireShapeItr itr;
+      odb::dbShape shape;
+      for (itr.begin(wire); itr.next(shape);) {
+        geom.boxes.push_back(shape.getBox());
+      }
+    }
+  }
+
+  if (geom.boxes.empty()) {
+    for (odb::dbITerm* iterm : net->getITerms()) {
+      int x = 0;
+      int y = 0;
+      if (iterm->getAvgXY(&x, &y)) {
+        geom.terminals.emplace_back(x, y);
+      } else if (odb::dbInst* inst = iterm->getInst()) {
+        geom.terminals.emplace_back(inst->getLocation());
+      }
+    }
+    for (odb::dbBTerm* bterm : net->getBTerms()) {
+      int x = 0;
+      int y = 0;
+      if (bterm->getFirstPinLocation(x, y)) {
+        geom.terminals.emplace_back(x, y);
+      }
+    }
+  }
+
+  return geom;
+}
+
+int64_t pinToNetDistance(const odb::Point& pin, const NetAccessGeometry& geom)
+{
+  int64_t best = kInfDistance;
+  for (const odb::Rect& box : geom.boxes) {
+    best = std::min(best, manhattanPointToRectDist(pin, box));
+    if (best == 0) {
+      return 0;
+    }
+  }
+  for (const odb::Point& term : geom.terminals) {
+    best = std::min(best, manhattanDist(pin, term));
+    if (best == 0) {
+      return 0;
+    }
+  }
+  return best == kInfDistance ? 0 : best;
+}
+
+void OptimizeScanWirelengthPinToNet(std::vector<std::unique_ptr<ScanCell>>& cells,
+                                    const ScanArchitectConfig& config,
+                                    utl::Logger* logger)
+{
+  (void) config;
+  const std::size_t n = cells.size();
+  if (n < 2) {
+    return;
+  }
+
+  std::vector<odb::Point> origins;
+  origins.reserve(n);
+  std::vector<odb::Point> scan_in_pts;
+  scan_in_pts.reserve(n);
+  std::vector<std::string_view> names;
+  names.reserve(n);
+  std::vector<NetAccessGeometry> net_geoms;
+  net_geoms.reserve(n);
+
+  for (const auto& cell : cells) {
+    const odb::Point origin = cell->getOrigin();
+    origins.emplace_back(origin);
+    names.emplace_back(cell->getName());
+
+    scan_in_pts.emplace_back(scanPinLocation(cell->getScanIn(), origin));
+    net_geoms.emplace_back(buildNetAccessGeometry(cell->getScanOut().getNet()));
+  }
+
+  std::size_t start_index = 0;
+  int64_t lowest = std::numeric_limits<int64_t>::max();
+  for (std::size_t i = 0; i < n; ++i) {
+    const odb::Point& p = origins[i];
+    const int64_t score
+        = static_cast<int64_t>(p.x()) + static_cast<int64_t>(p.y());
+    if (score < lowest || (score == lowest && names[i] < names[start_index])) {
+      start_index = i;
+      lowest = score;
+    }
+  }
+
+  const auto edge_cost = [&](std::size_t src, std::size_t dst) -> int64_t {
+    const int64_t dist = pinToNetDistance(scan_in_pts[dst], net_geoms[src]);
+    if (dist != 0 || !net_geoms[src].boxes.empty()
+        || !net_geoms[src].terminals.empty()) {
+      return dist;
+    }
+    // No routing/pin geometry available; fall back to placement-based distance.
+    return manhattanDist(origins[src], origins[dst]);
+  };
+
+  std::vector<std::size_t> order;
+  order.reserve(n);
+  std::vector<bool> used(n, false);
+
+  std::size_t cur = start_index;
+  used[cur] = true;
+  order.push_back(cur);
+
+  while (order.size() < n) {
+    bool found = false;
+    std::size_t best = 0;
+    int64_t best_cost = kInfDistance;
+
+    for (std::size_t i = 0; i < n; ++i) {
+      if (used[i]) {
+        continue;
+      }
+      const int64_t cost = edge_cost(cur, i);
+      if (!found || cost < best_cost
+          || (cost == best_cost && names[i] < names[best])) {
+        found = true;
+        best = i;
+        best_cost = cost;
+      }
+    }
+
+    if (!found) {
+      logger->error(utl::DFT, 17, "Couldn't find next scan cell to order");
+    }
+
+    used[best] = true;
+    order.push_back(best);
+    cur = best;
+  }
+
+  // Local improvement: repeated adjacent swaps (directional 2-opt-lite).
+  for (int pass = 0; pass < 3; ++pass) {
+    bool improved = false;
+    for (std::size_t pos = 1; pos + 1 < order.size(); ++pos) {
+      const std::size_t prev = order[pos - 1];
+      const std::size_t a = order[pos];
+      const std::size_t b = order[pos + 1];
+      const bool has_next = (pos + 2 < order.size());
+      const std::size_t next = has_next ? order[pos + 2] : 0;
+
+      const int64_t before
+          = edge_cost(prev, a) + edge_cost(a, b)
+            + (has_next ? edge_cost(b, next) : 0);
+      const int64_t after
+          = edge_cost(prev, b) + edge_cost(b, a)
+            + (has_next ? edge_cost(a, next) : 0);
+
+      if (after < before) {
+        std::swap(order[pos], order[pos + 1]);
+        improved = true;
+      }
+    }
+    if (!improved) {
+      break;
+    }
+  }
+
+  std::vector<std::unique_ptr<ScanCell>> ordered;
+  ordered.reserve(n);
+  for (const std::size_t idx : order) {
+    ordered.emplace_back(std::move(cells[idx]));
+  }
+  std::swap(cells, ordered);
+}
 }  // namespace
 
 void OptimizeScanWirelength(std::vector<std::unique_ptr<ScanCell>>& cells,
+                            const ScanArchitectConfig& config,
                             utl::Logger* logger)
 {
   // Nothing to order
@@ -54,6 +301,12 @@ void OptimizeScanWirelength(std::vector<std::unique_ptr<ScanCell>>& cells,
     if (!cell->isPlaced()) {
       return;
     }
+  }
+
+  if (config.getScanOrderMetric()
+      == ScanArchitectConfig::ScanOrderMetric::PinToNet) {
+    OptimizeScanWirelengthPinToNet(cells, config, logger);
+    return;
   }
 
   const auto manhattan = [](const odb::Point& a, const odb::Point& b) -> int64_t {

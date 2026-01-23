@@ -3,13 +3,15 @@
 
 #pragma once
 
-#include "ScanArchitect.hh"
+#include "ScanArchitectConfig.hh"
+#include "ScanCell.hh"
 #include "utl/Logger.h"
 
 namespace dft {
 
 // Order scan cells to reduce wirelength
 void OptimizeScanWirelength(std::vector<std::unique_ptr<ScanCell>>& cells,
+                            const ScanArchitectConfig& config,
                             utl::Logger* logger);
 
 }  // namespace dft
