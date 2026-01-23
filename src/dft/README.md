@@ -26,8 +26,10 @@ The command `set_dft_config` sets the DFT configuration variables.
 ```tcl
 set_dft_config 
     [-max_length <int>]
+    [-chain_count <int>]
     [-max_chains <int>]
     [-clock_mixing <string>]
+    [-scan_order_metric <string>]
     [-scan_enable_name_pattern <string>]
     [-scan_in_name_pattern <string>]
     [-scan_out_name_pattern <string>]
@@ -38,9 +40,11 @@ set_dft_config
 | Switch Name | Description |
 | ---- | ---- |
 | `-max_length` | The maximum number of bits that can be in each scan chain. |
+| `-chain_count` | The exact number of scan chains to generate. In `no_mix`, this is per clock-edge pair; in `clock_mix`, it is the total. When set, this takes priority over `max_length`/`max_chains` inference. |
 | `-max_chains` | The maximum number of scan chains that will be generated. This takes priority over `max_length`,
 in `no_mix` clock mode it specifies a maximum number of chains per clock-edge pair. |
 | `-clock_mixing` | How architect will mix the scan flops based on the clock driver. `no_mix`: Creates scan chains with only one type of clock and edge. This may create unbalanced chains. `clock_mix`: Creates scan chains mixing clocks and edges. Falling edge flops are going to be stitched before rising edge. |
+| `-scan_order_metric` | How scan cells are ordered within each chain. `PLACEMENT` (default) minimizes cell-to-cell Manhattan distance; `PIN_TO_NET` uses a routing-aware incremental cost (pin-to-net distance to existing routed/guide geometry of the previous cell’s scan-out net). `PIN_TO_NET` is most effective when run after a trial/global route so guides exist. |
 | `-scan_enable_name_pattern` | A format pattern with one or less set of braces (`{}`) to use to find or create scan enable drivers during scan chain stitching. The braces, if found, will be set to `0` as DFT architectures typically use a single shift-enable for all scan chains. If an un-escaped forward slash (`/`) is found, instead of searching for and/or creating a top-level port, an instance's pin will be searched for instead where the part of the string preceding the `/` is interpreted as the instance name and part succeeding it will be interpreted as the pin's name. |
 | `-scan_in_name_pattern` | A format pattern with one or less braces (`{}`) to use to find or create scan in drivers during scan chain stitching. The braces will be replaced with the chain's ordinal number (starting at `0`). If an un-escaped forward slash (`/`) is found, instead of searching for and/or creating a top-level port, an instance's pin will be searched for instead where the part of the string preceding the `/` is interpreted as the instance name and part succeeding it will be interpreted as the pin's name. |
 | `-scan_out_name_pattern` | A format pattern with one or less braces (`{}`) to use to find or create scan in loads during scan chain stitching. The braces will be replaced with the chain's ordinal number (starting at `0`). If an un-escaped forward slash (`/`) is found, instead of searching for and/or creating a top-level port, an instance's pin will be searched for instead where the part of the string preceding the `/` is interpreted as the instance name and part succeeding it will be interpreted as the pin's name. |
