@@ -19,18 +19,18 @@ module scan_architect_no_mix_nangate45 (clk,
     .Z(out));
  SDFF_X1 ff1 (.D(in1),
     .SE(scan_enable_0),
-    .SI(n2),
+    .SI(scan_in_0),
     .CK(clk),
     .Q(n1));
  SDFF_X1 ff2 (.D(n1),
     .SE(scan_enable_0),
-    .SI(n3),
+    .SI(n1),
     .CK(clk),
     .Q(n2));
  SDFF_X1 ff3 (.D(n2),
     .SE(scan_enable_0),
-    .SI(scan_in_0),
+    .SI(n2),
     .CK(clk),
     .Q(n3));
- assign scan_out_0 = n1;
+ assign scan_out_0 = n3;
 endmodule

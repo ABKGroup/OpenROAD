@@ -12,12 +12,12 @@
 #include "ClockDomain.hh"
 #include "DftConfig.hh"
 #include "ScanArchitect.hh"
+#include "ScanArchitectConfig.hh"
 #include "ScanCell.hh"
 #include "ScanCellFactory.hh"
+#include "ScanPin.hh"
 #include "ScanReplace.hh"
 #include "ScanStitch.hh"
-#include "boost/property_tree/json_parser.hpp"
-#include "boost/property_tree/ptree.hpp"
 #include "db_sta/dbSta.hh"
 #include "odb/db.h"
 #include "utl/Logger.h"
@@ -167,7 +167,7 @@ void Dft::reportDftConfig() const
 std::vector<std::unique_ptr<ScanChain>> Dft::scanArchitect()
 {
   std::vector<std::unique_ptr<ScanCell>> scan_cells
-      = CollectScanCells(db_, sta_, logger_);
+      = CollectScanCells(db_, sta_, dft_config_->getScanArchitectConfig(), logger_);
 
   // Scan Architect
   std::unique_ptr<ScanCellsBucket> scan_cells_bucket
@@ -204,8 +204,10 @@ void Dft::scanOpt()
   ScanStitch stitch(db_, logger_, dft_config_->getScanStitchConfig());
   stitch.Stitch(scan_chains);
 
-  logger_->info(
-      utl::DFT, 15, "Scan Opt re-stitched {:d} scan chain(s)", scan_chains.size());
+  logger_->info(utl::DFT,
+                15,
+                "Scan Opt re-stitched {:d} scan chain(s)",
+                scan_chains.size());
 }
 
 }  // namespace dft

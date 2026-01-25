@@ -19,16 +19,38 @@
 #include "db_sta/dbNetwork.hh"
 #include "odb/db.h"
 #include "odb/dbTypes.h"
-#include "sta/EquivCells.hh"
 #include "sta/FuncExpr.hh"
 #include "sta/Liberty.hh"
 #include "sta/NetworkClass.hh"
-#include "sta/Sequential.hh"
+#include "sta/PortDirection.hh"
 #include "utl/Logger.h"
 
 namespace dft {
 
 namespace {
+bool IsLikelyScanPortName(const char* name)
+{
+  // Some libraries encode scan behavior via nextstate_type or the FF next_state
+  // equation, but OpenSTA may not surface scan metadata on the pins. Allow
+  // common scan-only pins to be treated as "extra" without blocking the
+  // non-scan -> scan mapping.
+  return strcasecmp(name, "SE") == 0 || strcasecmp(name, "SCE") == 0
+         || strcasecmp(name, "SCAN_EN") == 0
+         || strcasecmp(name, "SCAN_ENABLE") == 0
+         || strcasecmp(name, "SCANENABLE") == 0 || strcasecmp(name, "TE") == 0
+         || strcasecmp(name, "SI") == 0 || strcasecmp(name, "SD") == 0
+         || strcasecmp(name, "SCD") == 0 || strcasecmp(name, "SCAN_IN") == 0
+         || strcasecmp(name, "SCANIN") == 0 || strcasecmp(name, "SO") == 0
+         || strcasecmp(name, "SCO") == 0 || strcasecmp(name, "SCAN_OUT") == 0
+         || strcasecmp(name, "SCANOUT") == 0;
+}
+
+bool IsPgPort(const sta::LibertyPort* port)
+{
+  const sta::PortDirection* dir = port != nullptr ? port->direction() : nullptr;
+  return dir != nullptr && dir->isPowerGround();
+}
+
 // Checks the ports
 sta::LibertyPort* FindEquivalentPortInScanCell(
     const sta::LibertyPort* non_scan_cell_port,
@@ -37,7 +59,9 @@ sta::LibertyPort* FindEquivalentPortInScanCell(
   sta::LibertyCellPortIterator scan_cell_ports_iter(scan_cell);
   while (scan_cell_ports_iter.hasNext()) {
     sta::LibertyPort* scan_cell_port = scan_cell_ports_iter.next();
-
+    if (IsPgPort(scan_cell_port)) {
+      continue;
+    }
     bool port_equiv
         = non_scan_cell_port->direction() == scan_cell_port->direction();
     if (non_scan_cell_port->function() == nullptr
@@ -62,15 +86,18 @@ sta::LibertyPort* FindEquivalentPortInScanCell(
 // Checks the power ports between non scan cell and scan cell and checks if they
 // are equivalent. Returns the equivalent port found, otherwise nullptr if there
 // is none
-sta::LibertyPgPort* FindEquivalentPortInScanCell(
-    const sta::LibertyPgPort* non_scan_cell_port,
+sta::LibertyPort* FindEquivalentPgPortInScanCell(
+    const sta::LibertyPort* non_scan_cell_port,
     const sta::LibertyCell* scan_cell)
 {
-  sta::LibertyCellPgPortIterator scan_cell_ports_iter(scan_cell);
+  sta::LibertyCellPortIterator scan_cell_ports_iter(scan_cell);
   while (scan_cell_ports_iter.hasNext()) {
-    sta::LibertyPgPort* scan_cell_port = scan_cell_ports_iter.next();
+    sta::LibertyPort* scan_cell_port = scan_cell_ports_iter.next();
+    if (!IsPgPort(scan_cell_port)) {
+      continue;
+    }
     const bool port_equiv
-        = sta::LibertyPgPort::equiv(non_scan_cell_port, scan_cell_port);
+        = sta::LibertyPort::equiv(non_scan_cell_port, scan_cell_port);
     if (port_equiv) {
       return scan_cell_port;
     }
@@ -91,6 +118,9 @@ bool IsScanEquivalent(
   sta::LibertyCellPortIterator non_scan_cell_ports_iter(non_scan_cell);
   while (non_scan_cell_ports_iter.hasNext()) {
     sta::LibertyPort* non_scan_cell_port = non_scan_cell_ports_iter.next();
+    if (IsPgPort(non_scan_cell_port)) {
+      continue;
+    }
     sta::LibertyPort* scan_equiv_port
         = FindEquivalentPortInScanCell(non_scan_cell_port, scan_cell);
     if (!scan_equiv_port) {
@@ -101,12 +131,15 @@ bool IsScanEquivalent(
     seen_on_scan_cell.insert(scan_equiv_port);
   }
 
-  sta::LibertyCellPgPortIterator non_scan_cell_pg_ports_iter(non_scan_cell);
+  sta::LibertyCellPortIterator non_scan_cell_pg_ports_iter(non_scan_cell);
   while (non_scan_cell_pg_ports_iter.hasNext()) {
-    sta::LibertyPgPort* non_scan_cell_pg_port
+    sta::LibertyPort* non_scan_cell_pg_port
         = non_scan_cell_pg_ports_iter.next();
-    sta::LibertyPgPort* scan_equiv_port
-        = FindEquivalentPortInScanCell(non_scan_cell_pg_port, scan_cell);
+    if (!IsPgPort(non_scan_cell_pg_port)) {
+      continue;
+    }
+    sta::LibertyPort* scan_equiv_port
+        = FindEquivalentPgPortInScanCell(non_scan_cell_pg_port, scan_cell);
     if (!scan_equiv_port) {
       return false;
     }
@@ -120,11 +153,18 @@ bool IsScanEquivalent(
   sta::LibertyCellPortIterator scan_cell_ports_iter(scan_cell);
   while (scan_cell_ports_iter.hasNext()) {
     sta::LibertyPort* scan_cell_port = scan_cell_ports_iter.next();
+    if (IsPgPort(scan_cell_port)) {
+      continue;
+    }
     if (seen_on_scan_cell.find(scan_cell_port) != seen_on_scan_cell.end()) {
       continue;
     }
     // Extra scan-related pins are ok.
     if (scan_cell_port->scanSignalType() != sta::ScanSignalType::none) {
+      continue;
+    }
+    // Fall back to common pin names when scan metadata is missing.
+    if (IsLikelyScanPortName(scan_cell_port->name())) {
       continue;
     }
     return false;
@@ -154,17 +194,18 @@ std::unique_ptr<ScanCandidate> SelectBestScanCell(
     const sta::LibertyCell* non_scan_cell,
     std::vector<std::unique_ptr<ScanCandidate>>& scan_candidates)
 {
-  std::sort(scan_candidates.begin(),
-            scan_candidates.end(),
-            [&non_scan_cell](const auto& lhs, const auto& rhs) {
-              // We want to keep the difference as close as possible to the
-              // non_scan_cell
-              const double difference_lhs = DifferencePerformanceCells(
-                  non_scan_cell, lhs->getScanCell());
-              const double difference_rhs = DifferencePerformanceCells(
-                  non_scan_cell, rhs->getScanCell());
-              return difference_lhs < difference_rhs;
-            });
+  std::sort(
+      scan_candidates.begin(),
+      scan_candidates.end(),
+      [&non_scan_cell](const auto& lhs, const auto& rhs) {
+        // We want to keep the difference as close as possible to
+        // the non_scan_cell
+        const double difference_lhs
+            = DifferencePerformanceCells(non_scan_cell, lhs->getScanCell());
+        const double difference_rhs
+            = DifferencePerformanceCells(non_scan_cell, rhs->getScanCell());
+        return difference_lhs < difference_rhs;
+      });
 
   return std::move(scan_candidates.at(0));
 }

@@ -8,9 +8,9 @@ Clock domain: No Mix
 
 Scan chain 'chain_0' has 3 cells (3 bits)
 
-  ff3 (clk, rising)
+  ff1 (clk, rising)
   ff2
-  ff1
+  ff3
 
 
 No differences found.
