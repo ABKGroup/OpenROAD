@@ -3,6 +3,9 @@
 
 #pragma once
 
+#include <string>
+#include <string_view>
+
 #include "utl/Logger.h"
 
 namespace dft {
@@ -19,6 +22,36 @@ class ScanStitchConfig
   void setOutNamePattern(std::string_view out_name_pattern);
   std::string_view getOutNamePattern() const;
 
+  void setInsertLockup(bool enable);
+  bool getInsertLockup() const;
+
+  void setLockupCellRising(std::string_view cell_name);
+  std::string_view getLockupCellRising() const;
+
+  void setLockupCellFalling(std::string_view cell_name);
+  std::string_view getLockupCellFalling() const;
+
+  void setLockupInPin(std::string_view pin_name);
+  std::string_view getLockupInPin() const;
+
+  void setLockupOutPin(std::string_view pin_name);
+  std::string_view getLockupOutPin() const;
+
+  void setLockupClockPinRising(std::string_view pin_name);
+  std::string_view getLockupClockPinRising() const;
+
+  void setLockupClockPinFalling(std::string_view pin_name);
+  std::string_view getLockupClockPinFalling() const;
+
+  void setTimingBufferCell(std::string_view cell_name);
+  std::string_view getTimingBufferCell() const;
+
+  void setTimingBufferInPin(std::string_view pin_name);
+  std::string_view getTimingBufferInPin() const;
+
+  void setTimingBufferOutPin(std::string_view pin_name);
+  std::string_view getTimingBufferOutPin() const;
+
   // Prints using logger->report the config used by Scan Stitch
   void report(utl::Logger* logger) const;
 
@@ -26,6 +59,18 @@ class ScanStitchConfig
   std::string enable_name_pattern_ = "scan_enable_{}";
   std::string in_name_pattern_ = "scan_in_{}";
   std::string out_name_pattern_ = "scan_out_{}";
+
+  bool insert_lockup_{false};
+  std::string lockup_cell_rising_;
+  std::string lockup_cell_falling_;
+  std::string lockup_in_pin_ = "D";
+  std::string lockup_out_pin_ = "Q";
+  std::string lockup_clock_pin_rising_;
+  std::string lockup_clock_pin_falling_;
+
+  std::string timing_buffer_cell_;
+  std::string timing_buffer_in_pin_ = "A";
+  std::string timing_buffer_out_pin_ = "X";
 };
 
 }  // namespace dft

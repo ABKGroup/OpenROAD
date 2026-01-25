@@ -22,6 +22,7 @@ cc_library(
     deps = [
         "//src/dft/src/architect",
         "//src/dft/src/cells",
+        "//src/dft/src/clock_domain:clock_domain",
         "//src/dft/src/config",
         "//src/dft/src/utils",
         "//src/odb",

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "ScanChain.hh"
+#include "ScanArchitectConfig.hh"
 #include "ScanStitchConfig.hh"
 #include "Utils.hh"
 #include "odb/db.h"
@@ -25,6 +26,7 @@ class ScanStitch
  public:
   explicit ScanStitch(odb::dbDatabase* db,
                       utl::Logger* logger,
+                      const ScanArchitectConfig& architect_config,
                       const ScanStitchConfig& config);
 
   // Stitch one or more scan chains.
@@ -67,6 +69,7 @@ class ScanStitch
     return Port(port);
   }
 
+  const ScanArchitectConfig& architect_config_;
   const ScanStitchConfig& config_;
   odb::dbDatabase* db_;
   utl::Logger* logger_;

@@ -58,6 +58,16 @@ sta::define_cmd_args "set_dft_config" { [-max_length max_length]
                                         [-scan_enable_name_pattern scan_enable_name_pattern]
                                         [-scan_in_name_pattern scan_in_name_pattern]
                                         [-scan_out_name_pattern scan_out_name_pattern]
+                                        [-insert_lockup insert_lockup]
+                                        [-lockup_cell_rising lockup_cell_rising]
+                                        [-lockup_cell_falling lockup_cell_falling]
+                                        [-lockup_in_pin lockup_in_pin]
+                                        [-lockup_out_pin lockup_out_pin]
+                                        [-lockup_clock_pin_rising lockup_clock_pin_rising]
+                                        [-lockup_clock_pin_falling lockup_clock_pin_falling]
+                                        [-timing_buffer_cell timing_buffer_cell]
+                                        [-timing_buffer_in_pin timing_buffer_in_pin]
+                                        [-timing_buffer_out_pin timing_buffer_out_pin]
                                         }
 proc set_dft_config { args } {
   sta::parse_key_args "set_dft_config" args \
@@ -78,6 +88,16 @@ proc set_dft_config { args } {
       -scan_enable_name_pattern
       -scan_in_name_pattern
       -scan_out_name_pattern
+      -insert_lockup
+      -lockup_cell_rising
+      -lockup_cell_falling
+      -lockup_in_pin
+      -lockup_out_pin
+      -lockup_clock_pin_rising
+      -lockup_clock_pin_falling
+      -timing_buffer_cell
+      -timing_buffer_in_pin
+      -timing_buffer_out_pin
     } \
     flags {}
 
@@ -169,6 +189,43 @@ proc set_dft_config { args } {
     if { [info exists keys($flag)] } {
       dft::set_dft_config_scan_signal_name_pattern $signal $keys($flag)
     }
+  }
+
+  if { [info exists keys(-insert_lockup)] } {
+    set insert_lockup $keys(-insert_lockup)
+    if { ![string is boolean -strict $insert_lockup] } {
+      utl::error DFT 60 "-insert_lockup must be a boolean (0/1/true/false)"
+    }
+    dft::set_dft_config_insert_lockup [expr {$insert_lockup ? 1 : 0}]
+  }
+
+  if { [info exists keys(-lockup_cell_rising)] } {
+    dft::set_dft_config_lockup_cell_rising $keys(-lockup_cell_rising)
+  }
+  if { [info exists keys(-lockup_cell_falling)] } {
+    dft::set_dft_config_lockup_cell_falling $keys(-lockup_cell_falling)
+  }
+  if { [info exists keys(-lockup_in_pin)] } {
+    dft::set_dft_config_lockup_in_pin $keys(-lockup_in_pin)
+  }
+  if { [info exists keys(-lockup_out_pin)] } {
+    dft::set_dft_config_lockup_out_pin $keys(-lockup_out_pin)
+  }
+  if { [info exists keys(-lockup_clock_pin_rising)] } {
+    dft::set_dft_config_lockup_clock_pin_rising $keys(-lockup_clock_pin_rising)
+  }
+  if { [info exists keys(-lockup_clock_pin_falling)] } {
+    dft::set_dft_config_lockup_clock_pin_falling $keys(-lockup_clock_pin_falling)
+  }
+
+  if { [info exists keys(-timing_buffer_cell)] } {
+    dft::set_dft_config_timing_buffer_cell $keys(-timing_buffer_cell)
+  }
+  if { [info exists keys(-timing_buffer_in_pin)] } {
+    dft::set_dft_config_timing_buffer_in_pin $keys(-timing_buffer_in_pin)
+  }
+  if { [info exists keys(-timing_buffer_out_pin)] } {
+    dft::set_dft_config_timing_buffer_out_pin $keys(-timing_buffer_out_pin)
   }
 }
 

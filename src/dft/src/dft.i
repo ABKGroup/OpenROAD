@@ -224,6 +224,113 @@ void set_dft_config_scan_signal_name_pattern(const char* signal_ptr, const char*
   }
 }
 
+void set_dft_config_insert_lockup(int enable)
+{
+  getDft()
+      ->getMutableDftConfig()
+      ->getMutableScanStitchConfig()
+      ->setInsertLockup(enable != 0);
+}
+
+void set_dft_config_lockup_cell_rising(const char* cell_ptr)
+{
+  if (!cell_ptr) {
+    return;
+  }
+  getDft()
+      ->getMutableDftConfig()
+      ->getMutableScanStitchConfig()
+      ->setLockupCellRising(cell_ptr);
+}
+
+void set_dft_config_lockup_cell_falling(const char* cell_ptr)
+{
+  if (!cell_ptr) {
+    return;
+  }
+  getDft()
+      ->getMutableDftConfig()
+      ->getMutableScanStitchConfig()
+      ->setLockupCellFalling(cell_ptr);
+}
+
+void set_dft_config_lockup_in_pin(const char* pin_ptr)
+{
+  if (!pin_ptr) {
+    return;
+  }
+  getDft()
+      ->getMutableDftConfig()
+      ->getMutableScanStitchConfig()
+      ->setLockupInPin(pin_ptr);
+}
+
+void set_dft_config_lockup_out_pin(const char* pin_ptr)
+{
+  if (!pin_ptr) {
+    return;
+  }
+  getDft()
+      ->getMutableDftConfig()
+      ->getMutableScanStitchConfig()
+      ->setLockupOutPin(pin_ptr);
+}
+
+void set_dft_config_lockup_clock_pin_rising(const char* pin_ptr)
+{
+  if (!pin_ptr) {
+    return;
+  }
+  getDft()
+      ->getMutableDftConfig()
+      ->getMutableScanStitchConfig()
+      ->setLockupClockPinRising(pin_ptr);
+}
+
+void set_dft_config_lockup_clock_pin_falling(const char* pin_ptr)
+{
+  if (!pin_ptr) {
+    return;
+  }
+  getDft()
+      ->getMutableDftConfig()
+      ->getMutableScanStitchConfig()
+      ->setLockupClockPinFalling(pin_ptr);
+}
+
+void set_dft_config_timing_buffer_cell(const char* cell_ptr)
+{
+  if (!cell_ptr) {
+    return;
+  }
+  getDft()
+      ->getMutableDftConfig()
+      ->getMutableScanStitchConfig()
+      ->setTimingBufferCell(cell_ptr);
+}
+
+void set_dft_config_timing_buffer_in_pin(const char* pin_ptr)
+{
+  if (!pin_ptr) {
+    return;
+  }
+  getDft()
+      ->getMutableDftConfig()
+      ->getMutableScanStitchConfig()
+      ->setTimingBufferInPin(pin_ptr);
+}
+
+void set_dft_config_timing_buffer_out_pin(const char* pin_ptr)
+{
+  if (!pin_ptr) {
+    return;
+  }
+  getDft()
+      ->getMutableDftConfig()
+      ->getMutableScanStitchConfig()
+      ->setTimingBufferOutPin(pin_ptr);
+}
+
 void report_dft_config() {
   getDft()->reportDftConfig();
 }

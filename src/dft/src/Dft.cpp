@@ -89,7 +89,10 @@ void Dft::executeDftPlan()
   }
   std::vector<std::unique_ptr<ScanChain>> scan_chains = scanArchitect();
 
-  ScanStitch stitch(db_, logger_, dft_config_->getScanStitchConfig());
+  ScanStitch stitch(db_,
+                    logger_,
+                    dft_config_->getScanArchitectConfig(),
+                    dft_config_->getScanStitchConfig());
   stitch.Stitch(scan_chains);
 
   // Write scan chains to odb
@@ -201,7 +204,10 @@ void Dft::scanOpt()
     return;
   }
 
-  ScanStitch stitch(db_, logger_, dft_config_->getScanStitchConfig());
+  ScanStitch stitch(db_,
+                    logger_,
+                    dft_config_->getScanArchitectConfig(),
+                    dft_config_->getScanStitchConfig());
   stitch.Stitch(scan_chains);
 
   logger_->info(utl::DFT,
