@@ -2,49 +2,58 @@
 [INFO ODB-0227] LEF file: sky130hd/sky130_fd_sc_hd_merged.lef, created 437 library cells
 ***************************
 Report DFT Plan
-Number of chains: 7
+Number of chains: 10
 Clock domain: Clock Mix
 ***************************
 
-Scan chain 'chain_0' has 3 cells (3 bits)
+Scan chain 'chain_0' has 2 cells (2 bits)
 
   ff10_clk2_falling (clock2, falling)
-  ff1_clk1_falling (clock1, falling)
-  ff10_clk2_rising (clock2, rising)
-
-Scan chain 'chain_1' has 3 cells (3 bits)
-
-  ff2_clk2_falling (clock2, falling)
-  ff1_clk1_rising (clock1, rising)
-  ff2_clk2_rising (clock2, rising)
-
-Scan chain 'chain_2' has 3 cells (3 bits)
-
-  ff3_clk1_falling (clock1, falling)
-  ff4_clk2_falling (clock2, falling)
-  ff3_clk1_rising (clock1, rising)
-
-Scan chain 'chain_3' has 3 cells (3 bits)
-
   ff5_clk1_falling (clock1, falling)
-  ff4_clk2_rising (clock2, rising)
+
+Scan chain 'chain_1' has 2 cells (2 bits)
+
+  ff10_clk2_rising (clock2, rising)
   ff5_clk1_rising (clock1, rising)
 
-Scan chain 'chain_4' has 3 cells (3 bits)
+Scan chain 'chain_2' has 2 cells (2 bits)
 
+  ff1_clk1_falling (clock1, falling)
   ff6_clk2_falling (clock2, falling)
-  ff7_clk1_falling (clock1, falling)
+
+Scan chain 'chain_3' has 2 cells (2 bits)
+
+  ff1_clk1_rising (clock1, rising)
   ff6_clk2_rising (clock2, rising)
 
-Scan chain 'chain_5' has 3 cells (3 bits)
+Scan chain 'chain_4' has 2 cells (2 bits)
 
-  ff8_clk2_falling (clock2, falling)
+  ff2_clk2_falling (clock2, falling)
+  ff7_clk1_falling (clock1, falling)
+
+Scan chain 'chain_5' has 2 cells (2 bits)
+
+  ff2_clk2_rising (clock2, rising)
   ff7_clk1_rising (clock1, rising)
-  ff8_clk2_rising (clock2, rising)
 
 Scan chain 'chain_6' has 2 cells (2 bits)
 
+  ff3_clk1_falling (clock1, falling)
+  ff8_clk2_falling (clock2, falling)
+
+Scan chain 'chain_7' has 2 cells (2 bits)
+
+  ff3_clk1_rising (clock1, rising)
+  ff8_clk2_rising (clock2, rising)
+
+Scan chain 'chain_8' has 2 cells (2 bits)
+
+  ff4_clk2_falling (clock2, falling)
   ff9_clk1_falling (clock1, falling)
+
+Scan chain 'chain_9' has 2 cells (2 bits)
+
+  ff4_clk2_rising (clock2, rising)
   ff9_clk1_rising (clock1, rising)
 
 

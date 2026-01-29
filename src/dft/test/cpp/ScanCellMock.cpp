@@ -59,7 +59,7 @@ odb::Point ScanCellMock::getOrigin() const
 
 bool ScanCellMock::isPlaced() const
 {
-  return false;
+  return true;
 }
 
 }  // namespace test

@@ -148,6 +148,14 @@ void set_dft_config_max_chains(int max_chains)
   getDft()->getMutableDftConfig()->getMutableScanArchitectConfig()->setMaxChains(max_chains);
 }
 
+void set_dft_config_max_imbalance(double percent)
+{
+  getDft()
+      ->getMutableDftConfig()
+      ->getMutableScanArchitectConfig()
+      ->setMaxImbalancePercent(percent);
+}
+
 void set_dft_config_clock_mixing(dft::ScanArchitectConfig::ClockMixing clock_mixing)
 {
   getDft()->getMutableDftConfig()->getMutableScanArchitectConfig()->setClockMixing(clock_mixing);

@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "utl/Logger.h"
@@ -39,6 +41,7 @@ class ScanArchitectConfig
 
   struct ScanOrderGroupConstraint
   {
+    std::string name;
     int priority = 64;  // lower runs earlier
     std::vector<std::string> inst_names;
   };
@@ -49,11 +52,28 @@ class ScanArchitectConfig
     std::string to_inst;
   };
 
+  struct ScanOrderBeforeConstraint
+  {
+    std::string before;
+    std::string after;
+  };
+
+  struct Point
+  {
+    int x = 0;
+    int y = 0;
+  };
+
+  struct ChainEndpoints
+  {
+    std::optional<Point> begin;
+    std::optional<Point> end;
+  };
+
   void setClockMixing(ClockMixing clock_mixing);
 
-  // The exact number of scan chains to generate (per clock-edge pair in NoMix,
-  // total in ClockMix). When set, this takes priority over max_length/max_chains
-  // inference.
+  // The exact number of scan chains to generate (total across the design).
+  // When set, this takes priority over max_length/max_chains inference.
   void setChainCount(uint64_t chain_count);
   const std::optional<uint64_t>& getChainCount() const;
 
@@ -61,9 +81,14 @@ class ScanArchitectConfig
   void setMaxLength(uint64_t max_length);
   const std::optional<uint64_t>& getMaxLength() const;
 
-  // The max number of scan chains (per clock in NoMixe mode) to generate
+  // The max number of scan chains (total across the design) to generate
   void setMaxChains(uint64_t max_chains);
   const std::optional<uint64_t>& getMaxChains() const;
+
+  // Max allowed chain length imbalance (percent). Constraint:
+  // max(bits)/min(bits) <= 1 + max_imbalance_percent/100.
+  void setMaxImbalancePercent(double percent);
+  double getMaxImbalancePercent() const;
 
   ClockMixing getClockMixing() const;
 
@@ -105,6 +130,8 @@ class ScanArchitectConfig
   // Optional scan ordering constraints (ScanOpt-style):
   // - group constraints (members must stay together in one chain)
   // - fixed edges (directed adjacency constraints)
+  // - before constraints (partial order)
+  // - optional chain endpoints/names and chain assignment
   //
   // Constraints are specified by scan-cell instance names (post scan_replace).
   void clearScanOrderConstraints();
@@ -112,6 +139,20 @@ class ScanArchitectConfig
   int getDefaultGroupPriority() const;
   const std::vector<ScanOrderGroupConstraint>& getScanOrderGroups() const;
   const std::vector<ScanOrderFixedEdgeConstraint>& getScanOrderFixedEdges() const;
+  const std::vector<ScanOrderBeforeConstraint>& getScanOrderBeforeConstraints()
+      const;
+
+  // Optional per-chain endpoint constraints (by chain name).
+  std::optional<ChainEndpoints> getChainEndpoints(
+      std::string_view chain_name) const;
+
+  // Optional explicit chain names (in file order).
+  const std::vector<std::string>& getChainNames() const;
+
+  // Optional hard assignment of scan instances to a specific chain (by name).
+  std::optional<std::string_view> getAssignedChainForInstance(
+      std::string_view inst_name) const;
+
   bool loadScanOrderConstraintsFile(const std::string& path, utl::Logger* logger);
 
   // Prints using logger->report the config used by Scan Architect
@@ -155,6 +196,17 @@ class ScanArchitectConfig
   int default_group_priority_{64};
   std::vector<ScanOrderGroupConstraint> scan_order_groups_;
   std::vector<ScanOrderFixedEdgeConstraint> scan_order_fixed_edges_;
+  std::vector<ScanOrderBeforeConstraint> scan_order_before_;
+
+  // Global chain endpoint constraints (optional).
+  std::vector<std::string> chain_names_;
+  std::unordered_map<std::string, ChainEndpoints> chain_endpoints_by_name_;
+
+  // Optional instance->chain assignment constraints (resolved from file).
+  std::unordered_map<std::string, std::string> instance_to_chain_name_;
+
+  // Length balance constraint (percent).
+  double max_imbalance_percent_{30.0};
 };
 
 }  // namespace dft

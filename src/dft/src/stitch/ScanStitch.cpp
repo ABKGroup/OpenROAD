@@ -477,10 +477,13 @@ void ScanStitch::Stitch(odb::dbBlock* block,
   // Let's connect the first cell
   scan_cells.front()->connectScanIn(scan_in_driver);
 
-  // Connect scan-out to scan-in along the chain (optionally inserting lockup
-  // latches between different clock/edge domains, and optional timing buffers
-  // driven by timing-critical scan-out pins.
-  const bool insert_lockup = config_.getInsertLockup();
+  // Connect scan-out to scan-in along the chain. When clock mixing is enabled
+  // at the planning stage, inserting lockup latches between different
+  // clock/edge domains is mandatory for correctness.
+  const bool insert_lockup
+      = config_.getInsertLockup()
+        || architect_config_.getClockMixing()
+               == ScanArchitectConfig::ClockMixing::ClockMix;
   const bool insert_timing_buffers = !config_.getTimingBufferCell().empty();
   const double critical_slack = architect_config_.getTimingCriticalSlack();
   for (size_t idx = 1; idx < scan_cells.size(); idx++) {

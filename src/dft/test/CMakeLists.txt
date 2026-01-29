@@ -2,6 +2,7 @@ or_integration_tests(
   "dft"
   TESTS
     max_chain_count_sky130
+    max_total_chain_count_sky130
     one_cell_sky130
     place_sort_sky130
     scan_architect_clock_mix_sky130

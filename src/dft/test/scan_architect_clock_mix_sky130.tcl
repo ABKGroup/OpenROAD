@@ -10,7 +10,11 @@ link_design scan_architect
 create_clock -name clock1 -period 2.0000 -waveform {0.0000 1.0000} [get_ports {clock1}]
 create_clock -name clock2 -period 2.0000 -waveform {0.0000 1.0000} [get_ports {clock2}]
 
-set_dft_config -max_length 3 -clock_mixing clock_mix
+set_dft_config -max_length 3 -clock_mixing clock_mix \
+  -lockup_cell_rising sky130_fd_sc_hd__dlxtp_1 \
+  -lockup_cell_falling sky130_fd_sc_hd__dlxtp_1 \
+  -lockup_clock_pin_rising GATE \
+  -lockup_clock_pin_falling GATE
 
 scan_replace
 

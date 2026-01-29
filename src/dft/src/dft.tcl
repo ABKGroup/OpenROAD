@@ -45,6 +45,7 @@ proc execute_dft_plan { args } {
 sta::define_cmd_args "set_dft_config" { [-max_length max_length]
                                         [-chain_count chain_count]
                                         [-max_chains max_chains]
+                                        [-max_imbalance max_imbalance]
                                         [-clock_mixing clock_mixing]
                                         [-scan_order_metric scan_order_metric]
                                         [-scan_order_solver scan_order_solver]
@@ -75,6 +76,7 @@ proc set_dft_config { args } {
       -max_length
       -chain_count
       -max_chains
+      -max_imbalance
       -clock_mixing
       -scan_order_metric
       -scan_order_solver
@@ -119,6 +121,17 @@ proc set_dft_config { args } {
     set max_chains $keys(-max_chains)
     sta::check_positive_integer "-max_chains" $max_chains
     dft::set_dft_config_max_chains $max_chains
+  }
+
+  if { [info exists keys(-max_imbalance)] } {
+    set v $keys(-max_imbalance)
+    if { ![string is double -strict $v] } {
+      utl::error DFT 102 "Expected a floating-point value for -max_imbalance"
+    }
+    if { $v < 0.0 } {
+      utl::error DFT 103 "Expected a non-negative value for -max_imbalance"
+    }
+    dft::set_dft_config_max_imbalance $v
   }
 
   if { [info exists keys(-clock_mixing)] } {
