@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -16,6 +17,7 @@
 #include <random>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -60,13 +62,169 @@ constexpr std::size_t kFarthestInsertionMaxCells = kQuadraticHeuristicMaxCells;
 // Bound memory used by ScanOpt-style cost matrices.
 constexpr std::size_t kScanOptMaxMatrixCells = 6000;
 
-// Only run the more expensive local-search operators on smaller chains.
-constexpr std::size_t kScanOptTwoOptMaxCells = 2500;
-constexpr std::size_t kScanOptSwapMaxCells = 4000;
+// ScanOpt local-search operators. These are O(n^2), but ScanOpt is only enabled
+// when we can afford building the full O(n^2) cost matrix (kScanOptMaxMatrixCells),
+// so allow them up to that same size to avoid leaving obvious long-edge/crossing
+// artifacts ("jumps") on larger single-chain designs.
+constexpr std::size_t kScanOptTwoOptMaxCells = kScanOptMaxMatrixCells;
+constexpr std::size_t kScanOptSwapMaxCells = kScanOptMaxMatrixCells;
 
 int64_t manhattanDist(const odb::Point& a,
                       const odb::Point& b,
                       double vertical_weight);
+
+std::optional<std::chrono::steady_clock::time_point> scanOptDeadline(
+    const ScanArchitectConfig& config)
+{
+  const double limit_s = config.getScanOptTimeLimitSeconds();
+  if (limit_s <= 0.0) {
+    return std::nullopt;
+  }
+  const auto dur = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+      std::chrono::duration<double>(limit_s));
+  return std::chrono::steady_clock::now() + dur;
+}
+
+bool scanOptTimeExpired(
+    const std::optional<std::chrono::steady_clock::time_point>& deadline)
+{
+  return deadline.has_value()
+         && std::chrono::steady_clock::now() >= deadline.value();
+}
+
+int64_t estimateLocalManhattanScale(const std::vector<odb::Point>& pts,
+                                    double vertical_weight)
+{
+  const std::size_t n = pts.size();
+  if (n < 2) {
+    return 1;
+  }
+
+  using Pt = bg::model::point<int, 2, bg::cs::cartesian>;
+  std::vector<std::pair<Pt, std::size_t>> data;
+  data.reserve(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    data.emplace_back(Pt(pts[i].x(), pts[i].y()), i);
+  }
+
+  bgi::rtree<std::pair<Pt, std::size_t>, bgi::rstar<4>> rtree(data);
+
+  static constexpr std::size_t kNearest = 8;
+  std::vector<int64_t> nearest;
+  nearest.reserve(n);
+
+  for (std::size_t i = 0; i < n; ++i) {
+    const Pt q(pts[i].x(), pts[i].y());
+    int64_t best = kInfDistance;
+
+    for (auto it = rtree.qbegin(bgi::nearest(q, kNearest + 1));
+         it != rtree.qend();
+         ++it) {
+      const auto cand = *it;
+      if (cand.second == i) {
+        continue;
+      }
+      best = std::min(best,
+                      manhattanDist(pts[i], pts[cand.second], vertical_weight));
+    }
+    if (best < kInfDistance) {
+      nearest.push_back(best);
+    }
+  }
+
+  if (nearest.empty()) {
+    return 1;
+  }
+
+  const std::size_t mid = nearest.size() / 2;
+  std::nth_element(nearest.begin(), nearest.begin() + mid, nearest.end());
+  return std::max<int64_t>(nearest[mid], 1);
+}
+
+int64_t jumpPenaltyFromManhattan(int64_t manhattan, int64_t local_scale)
+{
+  if (manhattan <= 0 || local_scale <= 0) {
+    return 0;
+  }
+
+  // Penalize long edges superlinearly to avoid visually/physically "jumpy"
+  // chains. This acts as a soft proxy for minimizing maximum hop length while
+  // remaining a simple additive edge objective.
+  // Smaller divisor => stronger penalty. Favor suppressing long "jump" edges
+  // even at the expense of some total wirelength, since large hops are both
+  // visually obvious and often physically undesirable.
+  static constexpr int64_t kPenaltyDivisor = 1;
+  static constexpr __int128 kPenaltyMultiplier = 16;
+  const __int128 num
+      = static_cast<__int128>(manhattan) * manhattan * kPenaltyMultiplier;
+  const __int128 den
+      = static_cast<__int128>(local_scale) * kPenaltyDivisor;
+  if (den <= 0) {
+    return 0;
+  }
+
+  const __int128 q = num / den;
+  if (q >= static_cast<__int128>(kInfDistance)) {
+    return kInfDistance;
+  }
+  return static_cast<int64_t>(q);
+}
+
+// If chain endpoints are not fixed, the chain "break" can be chosen freely.
+// Rotating the ordering to drop the most expensive edge (i -> i+1) can improve
+// both total wirelength proxy and worst-edge proxy, without changing relative
+// order (only the start/end).
+template <typename EdgeCost>
+void rotateOrderToDropWorstEdge(std::vector<std::size_t>& order,
+                                const std::vector<std::string_view>& names,
+                                EdgeCost edge_cost)
+{
+  const std::size_t n = order.size();
+  if (n < 2) {
+    return;
+  }
+
+  // Consider the "closure" edge from end->start. The original ordering is
+  // equivalent to choosing this closure as the break (not present in the path).
+  const int64_t closure_cost = edge_cost(order.back(), order.front());
+
+  int64_t max_internal_cost = -1;
+  std::vector<std::size_t> candidates;
+  candidates.reserve(4);
+  for (std::size_t i = 0; i + 1 < n; ++i) {
+    const int64_t cost = edge_cost(order[i], order[i + 1]);
+    if (cost > max_internal_cost) {
+      max_internal_cost = cost;
+      candidates.clear();
+      candidates.push_back(i);
+    } else if (cost == max_internal_cost) {
+      candidates.push_back(i);
+    }
+  }
+
+  // Only rotate if it strictly improves the objective (removing an internal
+  // edge larger than the would-be closure).
+  if (max_internal_cost <= closure_cost || candidates.empty()) {
+    return;
+  }
+
+  // Deterministic tie-break: pick the cut that yields the lexicographically
+  // smallest new start cell name.
+  std::size_t best = candidates.front();
+  std::string_view best_start = names[order[best + 1]];
+  for (std::size_t k = 1; k < candidates.size(); ++k) {
+    const std::size_t i = candidates[k];
+    const std::string_view start = names[order[i + 1]];
+    if (start < best_start) {
+      best_start = start;
+      best = i;
+    }
+  }
+
+  std::rotate(order.begin(),
+              order.begin() + static_cast<std::ptrdiff_t>(best + 1),
+              order.end());
+}
 
 double timingCriticalityFromSlack(float slack, double critical_slack)
 {
@@ -112,117 +270,6 @@ int64_t scaleEdgeCost(int64_t base_cost, double factor)
     return kInfDistance;
   }
   return static_cast<int64_t>(std::llround(scaled));
-}
-
-std::vector<std::size_t> minFeedthroughRowSweepOrder(
-    const std::vector<odb::Point>& origins,
-    const std::vector<std::string_view>& names,
-    double vertical_weight)
-{
-  const std::size_t n = origins.size();
-  std::map<int, std::vector<std::size_t>> rows_by_y;
-  for (std::size_t i = 0; i < n; ++i) {
-    rows_by_y[origins[i].y()].push_back(i);
-  }
-
-  struct Row
-  {
-    int y = 0;
-    std::vector<std::size_t> idxs;
-    std::size_t left = 0;
-    std::size_t right = 0;
-    int64_t span = 0;
-  };
-
-  std::vector<Row> rows;
-  rows.reserve(rows_by_y.size());
-  for (auto& [y, idxs] : rows_by_y) {
-    std::sort(idxs.begin(), idxs.end(), [&](std::size_t a, std::size_t b) {
-      const int ax = origins[a].x();
-      const int bx = origins[b].x();
-      if (ax != bx) {
-        return ax < bx;
-      }
-      return names[a] < names[b];
-    });
-
-    Row row;
-    row.y = y;
-    row.idxs = std::move(idxs);
-    row.left = row.idxs.front();
-    row.right = row.idxs.back();
-    row.span = std::abs(static_cast<int64_t>(origins[row.right].x())
-                        - static_cast<int64_t>(origins[row.left].x()));
-    rows.push_back(std::move(row));
-  }
-
-  if (rows.empty()) {
-    return {};
-  }
-
-  const std::size_t m = rows.size();
-  // Direction 0: traverse left->right (entry=left, exit=right)
-  // Direction 1: traverse right->left (entry=right, exit=left)
-  const auto entry_idx = [&](std::size_t row_i, int dir) -> std::size_t {
-    return dir == 0 ? rows[row_i].left : rows[row_i].right;
-  };
-  const auto exit_idx = [&](std::size_t row_i, int dir) -> std::size_t {
-    return dir == 0 ? rows[row_i].right : rows[row_i].left;
-  };
-
-  std::vector<std::array<int64_t, 2>> dp(m, {kInfDistance, kInfDistance});
-  std::vector<std::array<int, 2>> parent(m, {-1, -1});
-
-  for (int dir = 0; dir < 2; ++dir) {
-    dp[0][dir] = rows[0].span;
-  }
-
-  for (std::size_t i = 1; i < m; ++i) {
-    for (int dir = 0; dir < 2; ++dir) {
-      const std::size_t cur_entry = entry_idx(i, dir);
-      int64_t best = kInfDistance;
-      int best_prev = -1;
-      for (int prev_dir = 0; prev_dir < 2; ++prev_dir) {
-        const std::size_t prev_exit = exit_idx(i - 1, prev_dir);
-        const int64_t link
-            = manhattanDist(origins[prev_exit], origins[cur_entry], vertical_weight);
-        const int64_t cand = dp[i - 1][prev_dir] + link + rows[i].span;
-        if (cand < best || (cand == best && prev_dir < best_prev)) {
-          best = cand;
-          best_prev = prev_dir;
-        }
-      }
-      dp[i][dir] = best;
-      parent[i][dir] = best_prev;
-    }
-  }
-
-  int best_dir = 0;
-  if (dp[m - 1][1] < dp[m - 1][0]) {
-    best_dir = 1;
-  }
-
-  std::vector<int> dirs(m, 0);
-  int dir = best_dir;
-  for (std::size_t i = m; i-- > 0;) {
-    dirs[i] = dir;
-    if (i == 0) {
-      break;
-    }
-    dir = parent[i][dir] >= 0 ? parent[i][dir] : 0;
-  }
-
-  std::vector<std::size_t> order;
-  order.reserve(n);
-  for (std::size_t i = 0; i < m; ++i) {
-    if (dirs[i] == 0) {
-      order.insert(order.end(), rows[i].idxs.begin(), rows[i].idxs.end());
-    } else {
-      order.insert(order.end(), rows[i].idxs.rbegin(), rows[i].idxs.rend());
-    }
-  }
-
-  return order;
 }
 
 int64_t manhattanDist(const odb::Point& a,
@@ -286,6 +333,154 @@ odb::Point scanPinLocation(const ScanPin& pin, const odb::Point& fallback)
                  }},
       pin.getValue());
 }
+
+namespace {
+std::string UnescapeSlash(std::string_view input)
+{
+  std::string out;
+  out.reserve(input.size());
+  for (std::size_t i = 0; i < input.size(); ++i) {
+    const char c = input[i];
+    if (c == '\\' && i + 1 < input.size() && input[i + 1] == '/') {
+      continue;  // drop the escape, keep '/'
+    }
+    out.push_back(c);
+  }
+  return out;
+}
+
+std::pair<std::string, std::optional<std::string>> SplitTermIdentifier(
+    std::string_view input)
+{
+  std::size_t tracker = 0;
+  std::size_t slash_position;
+  while ((slash_position = input.find('/', tracker)) != std::string_view::npos) {
+    if (slash_position != 0 && input[slash_position - 1] == '\\') {
+      tracker = slash_position + 1;
+      continue;
+    }
+    const std::string inst = UnescapeSlash(input.substr(0, slash_position));
+    const std::string pin = UnescapeSlash(input.substr(slash_position + 1));
+    return {inst, pin};
+  }
+  return {UnescapeSlash(input), std::nullopt};
+}
+
+odb::dbBlock* InferBlockFromPlacedCells(
+    const std::vector<std::unique_ptr<ScanCell>>& cells)
+{
+  if (cells.empty()) {
+    return nullptr;
+  }
+
+  // Any scan pin on a scan cell should be an ITerm, and can be used to recover
+  // the owning block. This is only used to resolve endpoint terminal names.
+  odb::dbBlock* block = nullptr;
+  const ScanLoad scan_in = cells.front()->getScanIn();
+  std::visit(
+      [&](auto&& term) {
+        if (term == nullptr) {
+          return;
+        }
+        using T = std::decay_t<decltype(term)>;
+        if constexpr (std::is_same_v<T, odb::dbITerm*>) {
+          if (odb::dbInst* inst = term->getInst()) {
+            block = inst->getBlock();
+          }
+        } else if constexpr (std::is_same_v<T, odb::dbBTerm*>) {
+          block = term->getBlock();
+        }
+      },
+      scan_in.getValue());
+
+  return block;
+}
+
+std::optional<odb::Point> ResolveEndpointTerm(odb::dbBlock* block,
+                                              std::string_view term,
+                                              utl::Logger* logger)
+{
+  if (block == nullptr) {
+    return std::nullopt;
+  }
+
+  const auto term_info = SplitTermIdentifier(term);
+  if (term_info.second.has_value()) {
+    odb::dbInst* inst = block->findInst(term_info.first.c_str());
+    if (inst == nullptr) {
+      if (logger) {
+        logger->warn(utl::DFT,
+                     210,
+                     "Scan constraints: endpoint instance '{}' not found "
+                     "(term '{}'); ignoring endpoint.",
+                     term_info.first,
+                     term);
+      }
+      return std::nullopt;
+    }
+    odb::dbITerm* iterm = inst->findITerm(term_info.second->c_str());
+    if (iterm == nullptr) {
+      if (logger) {
+        logger->warn(
+            utl::DFT,
+            211,
+            "Scan constraints: endpoint iterm '{}/{}' not found; ignoring "
+            "endpoint.",
+            term_info.first,
+            *term_info.second);
+      }
+      return std::nullopt;
+    }
+    int x = 0;
+    int y = 0;
+    if (iterm->getAvgXY(&x, &y)) {
+      return odb::Point(x, y);
+    }
+    return inst->getLocation();
+  }
+
+  odb::dbBTerm* bterm = block->findBTerm(term_info.first.c_str());
+  if (bterm == nullptr) {
+    if (logger) {
+      logger->warn(utl::DFT,
+                   212,
+                   "Scan constraints: endpoint port '{}' not found; ignoring "
+                   "endpoint.",
+                   term_info.first);
+    }
+    return std::nullopt;
+  }
+  int x = 0;
+  int y = 0;
+  if (bterm->getFirstPinLocation(x, y)) {
+    return odb::Point(x, y);
+  }
+  if (logger) {
+    logger->warn(utl::DFT,
+                 213,
+                 "Scan constraints: endpoint port '{}' has no pin location; "
+                 "ignoring endpoint.",
+                 term_info.first);
+  }
+  return std::nullopt;
+}
+
+std::optional<odb::Point> EndpointPoint(
+    const ScanArchitectConfig::ChainEndpoint& endpoint,
+    odb::dbBlock* block,
+    utl::Logger* logger)
+{
+  using Type = ScanArchitectConfig::ChainEndpoint::Type;
+  switch (endpoint.type) {
+    case Type::Point:
+      return odb::Point(endpoint.point.x, endpoint.point.y);
+    case Type::Term:
+      return ResolveEndpointTerm(block, endpoint.term, logger);
+    default:
+      return std::nullopt;
+  }
+}
+}  // namespace
 
 struct NetAccessGeometry
 {
@@ -422,12 +617,84 @@ std::vector<std::size_t> scanOptGreedyOrder(
   return order;
 }
 
+std::vector<std::size_t> scanOptGreedyOrderEndFixed(
+    const ScanOptMatrix& m,
+    std::size_t start,
+    std::size_t fixed_end,
+    const std::vector<std::string_view>& names,
+    utl::Logger* logger)
+{
+  const std::size_t n = m.n;
+  if (n < 2) {
+    return {};
+  }
+  if (fixed_end >= n) {
+    logger->error(utl::DFT,
+                  206,
+                  "Internal error: fixed_end index {} out of range for n={}",
+                  fixed_end,
+                  n);
+  }
+  if (start == fixed_end) {
+    logger->error(utl::DFT,
+                  207,
+                  "Internal error: start index equals fixed_end index {}",
+                  start);
+  }
+
+  std::vector<std::size_t> order;
+  order.reserve(n);
+  std::vector<bool> used(n, false);
+
+  used[fixed_end] = true;
+
+  std::size_t cur = start;
+  used[cur] = true;
+  order.push_back(cur);
+
+  while (order.size() + 1 < n) {  // leave room for fixed_end
+    bool found = false;
+    std::size_t best = 0;
+    int32_t best_cost = kScanOptLargeCost;
+
+    for (std::size_t i = 0; i < n; ++i) {
+      if (used[i]) {
+        continue;
+      }
+      const int32_t cost = m.get(cur, i);
+      if (!found || cost < best_cost
+          || (cost == best_cost && names[i] < names[best])) {
+        found = true;
+        best = i;
+        best_cost = cost;
+      }
+    }
+
+    if (!found) {
+      logger->error(utl::DFT, 208, "Couldn't find next scan cell to order");
+    }
+
+    used[best] = true;
+    order.push_back(best);
+    cur = best;
+  }
+
+  order.push_back(fixed_end);
+  return order;
+}
+
 bool scanOptAdjacentSwapImprove(const ScanOptMatrix& m,
                                 const std::vector<std::string_view>& names,
-                                std::vector<std::size_t>& order)
+                                std::vector<std::size_t>& order,
+                                bool end_fixed)
 {
   bool improved = false;
-  for (std::size_t pos = 1; pos + 1 < order.size(); ++pos) {
+  const std::size_t n = order.size();
+  if (n < 3) {
+    return false;
+  }
+  const std::size_t limit = end_fixed ? (n - 1) : n;
+  for (std::size_t pos = 1; pos + 1 < limit; ++pos) {
     const std::size_t prev = order[pos - 1];
     const std::size_t a = order[pos];
     const std::size_t b = order[pos + 1];
@@ -453,7 +720,8 @@ bool scanOptAdjacentSwapImprove(const ScanOptMatrix& m,
 
 bool scanOptBestRelocateMove(const ScanOptMatrix& m,
                              const std::vector<std::string_view>& names,
-                             std::vector<std::size_t>& order)
+                             std::vector<std::size_t>& order,
+                             bool end_fixed)
 {
   const std::size_t n = order.size();
   if (n < 3) {
@@ -466,7 +734,8 @@ bool scanOptBestRelocateMove(const ScanOptMatrix& m,
   std::size_t best_after = 0;
 
   // Keep the start fixed for determinism (consistent with existing heuristics).
-  for (std::size_t from = 1; from < n; ++from) {
+  const std::size_t last_movable = end_fixed ? (n - 2) : (n - 1);
+  for (std::size_t from = 1; from <= last_movable; ++from) {
     const std::size_t node = order[from];
 
     const bool has_prev = (from > 0);
@@ -485,12 +754,9 @@ bool scanOptBestRelocateMove(const ScanOptMatrix& m,
       remove_delta = -static_cast<int64_t>(m.get(node, next));
     }
 
-    for (std::size_t after = 0; after < n; ++after) {
+    for (std::size_t after = 0; after <= last_movable; ++after) {
       if (after == from || after + 1 == from) {
         continue;  // no-op or invalid
-      }
-      if (after >= n - 1 && after != n - 1) {
-        continue;
       }
 
       const std::size_t ins_prev = order[after];
@@ -535,9 +801,105 @@ bool scanOptBestRelocateMove(const ScanOptMatrix& m,
   return true;
 }
 
+bool scanOptBestSegmentRelocateMove(const ScanOptMatrix& m,
+                                    const std::vector<std::string_view>& names,
+                                    std::vector<std::size_t>& order,
+                                    bool end_fixed,
+                                    std::size_t seg_len)
+{
+  const std::size_t n = order.size();
+  if (seg_len < 2 || n < seg_len + 2) {
+    return false;
+  }
+
+  bool found = false;
+  int64_t best_delta = 0;
+  std::size_t best_from = 0;
+  std::size_t best_after = 0;
+  std::string_view best_name;
+
+  const std::size_t last_movable = end_fixed ? (n - 2) : (n - 1);
+  if (last_movable < seg_len) {
+    return false;
+  }
+
+  // Keep the start fixed (from starts at 1).
+  for (std::size_t from = 1; from + seg_len - 1 <= last_movable; ++from) {
+    const std::size_t to = from + seg_len - 1;
+    const std::size_t prev = order[from - 1];
+    const std::size_t first = order[from];
+    const std::size_t last = order[to];
+    const bool has_next = (to + 1 < n);
+    const std::size_t next = has_next ? order[to + 1] : 0;
+
+    const int64_t remove_before
+        = static_cast<int64_t>(m.get(prev, first))
+          + (has_next ? static_cast<int64_t>(m.get(last, next)) : 0);
+    const int64_t remove_after
+        = has_next ? static_cast<int64_t>(m.get(prev, next)) : 0;
+    const int64_t remove_delta = remove_after - remove_before;
+
+    for (std::size_t after = 0; after <= last_movable; ++after) {
+      // Skip no-op and illegal insertions (within or immediately adjacent to
+      // the segment).
+      if (after + 1 >= from && after <= to) {
+        continue;
+      }
+
+      const std::size_t ins_prev = order[after];
+      const bool has_ins_next = (after + 1 < n);
+      const std::size_t ins_next = has_ins_next ? order[after + 1] : 0;
+
+      const int64_t insert_before
+          = has_ins_next ? static_cast<int64_t>(m.get(ins_prev, ins_next)) : 0;
+      const int64_t insert_after
+          = static_cast<int64_t>(m.get(ins_prev, first))
+            + (has_ins_next ? static_cast<int64_t>(m.get(last, ins_next)) : 0);
+      const int64_t insert_delta = insert_after - insert_before;
+
+      const int64_t delta = remove_delta + insert_delta;
+      if (delta < best_delta
+          || (delta == best_delta && found
+              && (names[first] < best_name
+                  || (names[first] == best_name
+                      && (from < best_from
+                          || (from == best_from && after < best_after)))))) {
+        found = true;
+        best_delta = delta;
+        best_from = from;
+        best_after = after;
+        best_name = names[first];
+      }
+    }
+  }
+
+  if (!found || best_delta >= 0) {
+    return false;
+  }
+
+  const std::size_t best_to = best_from + seg_len - 1;
+  std::vector<std::size_t> segment(
+      order.begin() + static_cast<std::ptrdiff_t>(best_from),
+      order.begin() + static_cast<std::ptrdiff_t>(best_to + 1));
+  order.erase(order.begin() + static_cast<std::ptrdiff_t>(best_from),
+              order.begin() + static_cast<std::ptrdiff_t>(best_to + 1));
+
+  std::size_t after = best_after;
+  if (after > best_to) {
+    after -= seg_len;
+  }
+  const std::size_t insert_index = after + 1;
+  order.insert(order.begin() + static_cast<std::ptrdiff_t>(insert_index),
+               segment.begin(),
+               segment.end());
+
+  return true;
+}
+
 bool scanOptBestSwapMove(const ScanOptMatrix& m,
                          const std::vector<std::string_view>& names,
-                         std::vector<std::size_t>& order)
+                         std::vector<std::size_t>& order,
+                         bool end_fixed)
 {
   const std::size_t n = order.size();
   if (n < 4) {
@@ -548,10 +910,11 @@ bool scanOptBestSwapMove(const ScanOptMatrix& m,
   int64_t best_delta = 0;
   std::size_t best_i = 0;
   std::size_t best_j = 0;
+  const std::size_t j_limit = end_fixed ? (n - 1) : n;
 
   // Keep the start fixed (i starts at 1).
   for (std::size_t i = 1; i + 1 < n; ++i) {
-    for (std::size_t j = i + 1; j < n; ++j) {
+    for (std::size_t j = i + 1; j < j_limit; ++j) {
       if (i == j) {
         continue;
       }
@@ -619,8 +982,12 @@ bool scanOptBestSwapMove(const ScanOptMatrix& m,
   return true;
 }
 
-bool scanOptFirstTwoOptMove(const ScanOptMatrix& m,
-                            std::vector<std::size_t>& order)
+bool scanOptBestTwoOptMove(
+    const ScanOptMatrix& m,
+    const std::vector<std::string_view>& names,
+    std::vector<std::size_t>& order,
+    bool end_fixed,
+    const std::optional<std::chrono::steady_clock::time_point>& deadline)
 {
   const std::size_t n = order.size();
   if (n < 4) {
@@ -645,8 +1012,18 @@ bool scanOptFirstTwoOptMove(const ScanOptMatrix& m,
     return rev_prefix[to] - rev_prefix[from];
   };
 
-  for (std::size_t i = 0; i + 2 < n; ++i) {
-    for (std::size_t j = i + 1; j < n; ++j) {
+  bool found = false;
+  int64_t best_delta = 0;
+  std::size_t best_i = 0;
+  std::size_t best_j = 0;
+
+  const std::size_t j_limit = end_fixed ? (n - 1) : n;
+  for (std::size_t i = 0; i + 2 < j_limit; ++i) {
+    // Poll the deadline periodically; this loop can be O(n^2).
+    if ((i & 63U) == 0U && scanOptTimeExpired(deadline)) {
+      break;
+    }
+    for (std::size_t j = i + 2; j < j_limit; ++j) {
       if (j <= i + 1) {
         continue;
       }
@@ -669,30 +1046,458 @@ bool scanOptFirstTwoOptMove(const ScanOptMatrix& m,
 
       const int64_t before = old_edges + old_inside;
       const int64_t after = new_edges + new_inside;
+      const int64_t delta = after - before;
 
-      if (after < before) {
-        std::reverse(order.begin() + static_cast<std::ptrdiff_t>(i + 1),
-                     order.begin() + static_cast<std::ptrdiff_t>(j + 1));
-        return true;
+      if (delta < best_delta
+          || (delta == best_delta && found
+              && (names[c] < names[order[best_j]]
+                  || (names[c] == names[order[best_j]]
+                      && names[a] < names[order[best_i]])))) {
+        found = true;
+        best_delta = delta;
+        best_i = i;
+        best_j = j;
       }
     }
   }
-  return false;
+
+  if (!found || best_delta >= 0) {
+    return false;
+  }
+
+  std::reverse(order.begin() + static_cast<std::ptrdiff_t>(best_i + 1),
+               order.begin() + static_cast<std::ptrdiff_t>(best_j + 1));
+  return true;
+}
+
+// Targeted 2-opt that tries to break the current worst edge (by ScanOpt cost),
+// rather than doing a full O(n^2) best-improvement search. This is a cheap way
+// to reduce visually-obvious long hops on large chains under a time limit.
+bool scanOptWorstEdgeTwoOptImprove(
+    const ScanOptMatrix& m,
+    const std::vector<std::string_view>& names,
+    std::vector<std::size_t>& order,
+    bool end_fixed,
+    const std::optional<std::chrono::steady_clock::time_point>& deadline)
+{
+  const std::size_t n = order.size();
+  if (n < 4) {
+    return false;
+  }
+
+  // j indexes the start of the second edge (c->d), so j+1 must be valid.
+  // Exclude the last node in the open-path case to avoid out-of-bounds.
+  const std::size_t j_limit = n - 1;
+
+  std::size_t worst_i = 0;
+  int64_t worst_cost = -1;
+  bool have_worst = false;
+  for (std::size_t i = 0; i + 2 < j_limit; ++i) {
+    const int64_t cost = m.get(order[i], order[i + 1]);
+    if (!have_worst || cost > worst_cost) {
+      have_worst = true;
+      worst_cost = cost;
+      worst_i = i;
+    }
+  }
+  if (!have_worst) {
+    return false;
+  }
+
+  // Prefix sums for forward edges and reversed-adjacent edges.
+  std::vector<int64_t> forward_prefix(n, 0);
+  std::vector<int64_t> rev_prefix(n, 0);
+  for (std::size_t i = 1; i < n; ++i) {
+    forward_prefix[i] = forward_prefix[i - 1] + m.get(order[i - 1], order[i]);
+    rev_prefix[i]
+        = rev_prefix[i - 1] + m.get(order[i], order[i - 1]);  // reversed edge
+  }
+
+  const auto segment_forward = [&](std::size_t from,
+                                   std::size_t to) -> int64_t {
+    return forward_prefix[to] - forward_prefix[from];
+  };
+  const auto segment_reversed = [&](std::size_t from,
+                                    std::size_t to) -> int64_t {
+    return rev_prefix[to] - rev_prefix[from];
+  };
+
+  const std::size_t i = worst_i;
+  bool found = false;
+  int64_t best_delta = 0;
+  std::size_t best_j = 0;
+
+  for (std::size_t j = i + 2; j < j_limit; ++j) {
+    if ((j & 255U) == 0U && scanOptTimeExpired(deadline)) {
+      break;
+    }
+
+    const std::size_t a = order[i];
+    const std::size_t b = order[i + 1];
+    const std::size_t c = order[j];
+    const std::size_t d = order[j + 1];
+
+    const int64_t old_inside = segment_forward(i + 1, j);
+    const int64_t new_inside = segment_reversed(i + 1, j);
+
+    const int64_t old_edges
+        = static_cast<int64_t>(m.get(a, b)) + static_cast<int64_t>(m.get(c, d));
+    const int64_t new_edges
+        = static_cast<int64_t>(m.get(a, c)) + static_cast<int64_t>(m.get(b, d));
+
+    const int64_t before = old_edges + old_inside;
+    const int64_t after = new_edges + new_inside;
+    const int64_t delta = after - before;
+
+    if (delta < best_delta
+        || (delta == best_delta && found
+            && (names[c] < names[order[best_j]]
+                || (names[c] == names[order[best_j]]
+                    && names[a] < names[order[i]])))) {
+      found = true;
+      best_delta = delta;
+      best_j = j;
+    }
+  }
+
+  if (!found || best_delta >= 0) {
+    return false;
+  }
+
+  std::reverse(order.begin() + static_cast<std::ptrdiff_t>(i + 1),
+               order.begin() + static_cast<std::ptrdiff_t>(best_j + 1));
+  return true;
+}
+
+// Targeted Or-opt style segment relocation focused on the current worst edge.
+// This is a direction-preserving move (no internal reversal) and can use larger
+// segments than scanOptBestSegmentRelocateMove without O(n^2) work.
+bool scanOptWorstEdgeSegmentRelocateImprove(
+    const ScanOptMatrix& m,
+    const std::vector<std::string_view>& names,
+    std::vector<std::size_t>& order,
+    bool end_fixed,
+    const std::optional<std::chrono::steady_clock::time_point>& deadline,
+    std::size_t max_seg_len)
+{
+  const std::size_t n = order.size();
+  if (n < 4 || max_seg_len < 2) {
+    return false;
+  }
+
+  const std::size_t j_limit = end_fixed ? (n - 1) : n;
+  if (j_limit < 4) {
+    return false;
+  }
+
+  std::size_t worst_i = 0;
+  int64_t worst_cost = -1;
+  bool have_worst = false;
+  for (std::size_t i = 0; i + 2 < j_limit; ++i) {
+    const int64_t cost = m.get(order[i], order[i + 1]);
+    if (!have_worst || cost > worst_cost) {
+      have_worst = true;
+      worst_cost = cost;
+      worst_i = i;
+    }
+  }
+  if (!have_worst) {
+    return false;
+  }
+
+  // Try relocating a segment that starts at the head of the worst edge. This
+  // guarantees we attempt to remove that edge from the path.
+  const std::size_t from = worst_i + 1;
+  const std::size_t last_movable = end_fixed ? (n - 2) : (n - 1);
+  if (from == 0 || from > last_movable) {
+    return false;
+  }
+
+  bool found = false;
+  int64_t best_delta = 0;
+  std::size_t best_to = 0;
+  std::size_t best_after = 0;
+  std::string_view best_name;
+
+  const std::size_t seg_limit = std::min(max_seg_len, last_movable - from + 1);
+  for (std::size_t seg_len = 2; seg_len <= seg_limit; ++seg_len) {
+    if (scanOptTimeExpired(deadline)) {
+      break;
+    }
+
+    const std::size_t to = from + seg_len - 1;
+    const std::size_t prev = order[from - 1];
+    const std::size_t first = order[from];
+    const std::size_t last = order[to];
+    const bool has_next = (to + 1 < n);
+    const std::size_t next = has_next ? order[to + 1] : 0;
+
+    const int64_t remove_before = static_cast<int64_t>(m.get(prev, first));
+    const int64_t remove_after
+        = has_next ? static_cast<int64_t>(m.get(last, next)) : 0;
+    const int64_t remove_join
+        = has_next ? static_cast<int64_t>(m.get(prev, next)) : 0;
+    const int64_t remove_delta = remove_join - remove_before - remove_after;
+
+    for (std::size_t after = 0; after <= last_movable; ++after) {
+      if ((after & 255U) == 0U && scanOptTimeExpired(deadline)) {
+        break;
+      }
+
+      // Disallow inserting inside the segment or immediately before it (no-op).
+      if (after >= from - 1 && after <= to) {
+        continue;
+      }
+
+      const std::size_t ins_prev = order[after];
+      const bool has_ins_next = (after + 1 < n);
+      const std::size_t ins_next = has_ins_next ? order[after + 1] : 0;
+
+      const int64_t insert_before
+          = has_ins_next ? static_cast<int64_t>(m.get(ins_prev, ins_next)) : 0;
+      const int64_t insert_after
+          = static_cast<int64_t>(m.get(ins_prev, first))
+            + (has_ins_next ? static_cast<int64_t>(m.get(last, ins_next)) : 0);
+      const int64_t insert_delta = insert_after - insert_before;
+
+      const int64_t delta = remove_delta + insert_delta;
+      if (delta < best_delta
+          || (delta == best_delta && found
+              && (names[first] < best_name
+                  || (names[first] == best_name
+                      && (to < best_to
+                          || (to == best_to && after < best_after)))))) {
+        found = true;
+        best_delta = delta;
+        best_to = to;
+        best_after = after;
+        best_name = names[first];
+      }
+    }
+  }
+
+  if (!found || best_delta >= 0) {
+    return false;
+  }
+
+  std::vector<std::size_t> segment(
+      order.begin() + static_cast<std::ptrdiff_t>(from),
+      order.begin() + static_cast<std::ptrdiff_t>(best_to + 1));
+  order.erase(order.begin() + static_cast<std::ptrdiff_t>(from),
+              order.begin() + static_cast<std::ptrdiff_t>(best_to + 1));
+
+  std::size_t after = best_after;
+  if (after > best_to) {
+    after -= segment.size();
+  }
+  const std::size_t insert_index = after + 1;
+  order.insert(order.begin() + static_cast<std::ptrdiff_t>(insert_index),
+               segment.begin(),
+               segment.end());
+  return true;
+}
+
+// Direction-preserving 3-opt "subtour swap" focused on the current worst edge.
+// This swaps two adjacent segments [a..b-1] and [b..c] into [b..c][a..b-1],
+// changing only the boundary edges (no internal reversal).
+//
+// This move corresponds to the direction-preserving 3-opt reconnection from
+// Boese/Kahng/Tsayy (1994) and can be effective at removing large "jump" edges
+// that remain after 2-opt / Or-opt style relocations.
+bool scanOptWorstEdgeSegmentSwapImprove(
+    const ScanOptMatrix& m,
+    const std::vector<std::string_view>& names,
+    std::vector<std::size_t>& order,
+    bool end_fixed,
+    const std::optional<std::chrono::steady_clock::time_point>& deadline,
+    std::size_t max_seg_len)
+{
+  const std::size_t n = order.size();
+  if (n < 4 || max_seg_len == 0) {
+    return false;
+  }
+
+  const std::size_t last_movable = end_fixed ? (n - 2) : (n - 1);
+  if (last_movable < 2) {
+    return false;
+  }
+
+  // Choose the worst "swappable" edge. We keep order[0] fixed, so the boundary
+  // index b must be >= 2 (so segment1 starts at a >= 1). Also require segment2
+  // to start at b <= last_movable.
+  std::size_t worst_i = 0;
+  int64_t worst_cost = -1;
+  bool have_worst = false;
+  for (std::size_t i = 1; i + 1 <= last_movable; ++i) {
+    const int64_t cost = m.get(order[i], order[i + 1]);
+    if (!have_worst || cost > worst_cost) {
+      have_worst = true;
+      worst_cost = cost;
+      worst_i = i;
+    }
+  }
+  if (!have_worst) {
+    return false;
+  }
+
+  // Boundary between the two segments (edge X->B).
+  const std::size_t b = worst_i + 1;
+  if (b < 2 || b > last_movable) {
+    return false;
+  }
+
+  const std::size_t max_left = std::min(max_seg_len, b - 1);  // len1 <= b-1
+  const std::size_t max_right
+      = std::min(max_seg_len, last_movable - b + 1);  // len2 <= ...
+  if (max_left == 0 || max_right == 0) {
+    return false;
+  }
+
+  bool found = false;
+  int64_t best_delta = 0;
+  std::size_t best_len1 = 0;
+  std::size_t best_len2 = 0;
+  std::string_view best_key;
+
+  const std::size_t x = order[b - 1];
+  const std::size_t bnode = order[b];
+
+  for (std::size_t len1 = 1; len1 <= max_left; ++len1) {
+    if (scanOptTimeExpired(deadline)) {
+      break;
+    }
+    const std::size_t a = b - len1;
+    if (a < 1) {
+      continue;  // keep start fixed
+    }
+    const std::size_t p = order[a - 1];
+    const std::size_t anode = order[a];
+
+    for (std::size_t len2 = 1; len2 <= max_right; ++len2) {
+      if ((len2 & 1023U) == 0U && scanOptTimeExpired(deadline)) {
+        break;
+      }
+
+      const std::size_t c = b + len2 - 1;
+      if (c < b || c > last_movable) {
+        continue;
+      }
+
+      const std::size_t cnode = order[c];
+      const bool has_n = (c + 1 < n);
+      const std::size_t nnode = has_n ? order[c + 1] : 0;
+
+      const int64_t before = static_cast<int64_t>(m.get(p, anode))
+                             + static_cast<int64_t>(m.get(x, bnode))
+                             + (has_n ? static_cast<int64_t>(m.get(cnode, nnode))
+                                      : 0);
+      const int64_t after = static_cast<int64_t>(m.get(p, bnode))
+                            + static_cast<int64_t>(m.get(cnode, anode))
+                            + (has_n ? static_cast<int64_t>(m.get(x, nnode))
+                                     : 0);
+      const int64_t delta = after - before;
+
+      // Deterministic tie-break for reproducibility.
+      const std::string_view key = names[bnode];
+      if (delta < best_delta
+          || (delta == best_delta && found
+              && (key < best_key
+                  || (key == best_key
+                      && (len1 < best_len1
+                          || (len1 == best_len1 && len2 < best_len2)))))) {
+        found = true;
+        best_delta = delta;
+        best_len1 = len1;
+        best_len2 = len2;
+        best_key = key;
+      }
+    }
+  }
+
+  if (!found || best_delta >= 0) {
+    return false;
+  }
+
+  const std::size_t a = b - best_len1;
+  const std::size_t c = b + best_len2 - 1;
+  std::rotate(order.begin() + static_cast<std::ptrdiff_t>(a),
+              order.begin() + static_cast<std::ptrdiff_t>(b),
+              order.begin() + static_cast<std::ptrdiff_t>(c + 1));
+  return true;
 }
 
 void scanOptDescent(const ScanOptMatrix& m,
                     const std::vector<std::string_view>& names,
-                    std::vector<std::size_t>& order)
+                    std::vector<std::size_t>& order,
+                    bool end_fixed,
+                    const std::optional<std::chrono::steady_clock::time_point>&
+                        deadline)
 {
-  // A small number of local-search passes tends to give most of the benefit.
-  for (int pass = 0; pass < 4; ++pass) {
-    bool improved = scanOptAdjacentSwapImprove(m, names, order);
-    improved |= scanOptBestRelocateMove(m, names, order);
+  // Iterate local-search passes until convergence or time limit.
+  for (int pass = 0; pass < 500; ++pass) {
+    if (scanOptTimeExpired(deadline)) {
+      break;
+    }
+    bool improved = scanOptAdjacentSwapImprove(m, names, order, end_fixed);
+    if (scanOptTimeExpired(deadline)) {
+      break;
+    }
+    improved |= scanOptBestRelocateMove(m, names, order, end_fixed);
+    if (scanOptTimeExpired(deadline)) {
+      break;
+    }
+    improved |= scanOptWorstEdgeTwoOptImprove(m, names, order, end_fixed, deadline);
+    if (scanOptTimeExpired(deadline)) {
+      break;
+    }
+    improved |= scanOptWorstEdgeSegmentRelocateImprove(
+        m, names, order, end_fixed, deadline, 256);
+    if (scanOptTimeExpired(deadline)) {
+      break;
+    }
+    improved |= scanOptWorstEdgeSegmentSwapImprove(
+        m, names, order, end_fixed, deadline, 256);
+    if (scanOptTimeExpired(deadline)) {
+      break;
+    }
+    // Or-opt: relocate short segments to improve locality and reduce long
+    // "jump" edges (direction-preserving 3-opt neighborhood).
+    improved |= scanOptBestSegmentRelocateMove(m, names, order, end_fixed, 10);
+    if (scanOptTimeExpired(deadline)) {
+      break;
+    }
+    improved |= scanOptBestSegmentRelocateMove(m, names, order, end_fixed, 8);
+    if (scanOptTimeExpired(deadline)) {
+      break;
+    }
+    improved |= scanOptBestSegmentRelocateMove(m, names, order, end_fixed, 6);
+    if (scanOptTimeExpired(deadline)) {
+      break;
+    }
+    improved |= scanOptBestSegmentRelocateMove(m, names, order, end_fixed, 5);
+    if (scanOptTimeExpired(deadline)) {
+      break;
+    }
+    improved |= scanOptBestSegmentRelocateMove(m, names, order, end_fixed, 4);
+    if (scanOptTimeExpired(deadline)) {
+      break;
+    }
+    improved |= scanOptBestSegmentRelocateMove(m, names, order, end_fixed, 3);
+    if (scanOptTimeExpired(deadline)) {
+      break;
+    }
+    improved |= scanOptBestSegmentRelocateMove(m, names, order, end_fixed, 2);
+    if (scanOptTimeExpired(deadline)) {
+      break;
+    }
     if (order.size() <= kScanOptSwapMaxCells) {
-      improved |= scanOptBestSwapMove(m, names, order);
+      improved |= scanOptBestSwapMove(m, names, order, end_fixed);
+    }
+    if (scanOptTimeExpired(deadline)) {
+      break;
     }
     if (order.size() <= kScanOptTwoOptMaxCells) {
-      improved |= scanOptFirstTwoOptMove(m, order);
+      improved |= scanOptBestTwoOptMove(m, names, order, end_fixed, deadline);
     }
     if (!improved) {
       break;
@@ -701,15 +1506,69 @@ void scanOptDescent(const ScanOptMatrix& m,
 }
 
 void scanOptDoubleBridgeKick(std::vector<std::size_t>& order,
-                             std::mt19937_64& rng)
+                             std::mt19937_64& rng,
+                             bool end_fixed)
 {
   const std::size_t n = order.size();
   if (n < 8) {
-    std::shuffle(order.begin() + 1, order.end(), rng);
+    if (end_fixed && n > 2) {
+      std::shuffle(order.begin() + 1, order.end() - 1, rng);
+    } else {
+      std::shuffle(order.begin() + 1, order.end(), rng);
+    }
     return;
   }
 
-  std::uniform_int_distribution<std::size_t> dist(1, n - 2);
+  if (!end_fixed) {
+    std::uniform_int_distribution<std::size_t> dist(1, n - 2);
+    std::size_t a = dist(rng);
+    std::size_t b = dist(rng);
+    std::size_t c = dist(rng);
+    std::size_t d = dist(rng);
+
+    std::array<std::size_t, 4> cuts{a, b, c, d};
+    std::sort(cuts.begin(), cuts.end());
+    a = cuts[0];
+    b = cuts[1];
+    c = cuts[2];
+    d = cuts[3];
+
+    if (a == b || b == c || c == d) {
+      return;
+    }
+
+    std::vector<std::size_t> kicked;
+    kicked.reserve(n);
+    kicked.insert(kicked.end(), order.begin(), order.begin() + a);
+    kicked.insert(kicked.end(), order.begin() + b, order.begin() + c);
+    kicked.insert(kicked.end(), order.begin() + a, order.begin() + b);
+    kicked.insert(kicked.end(), order.begin() + c, order.begin() + d);
+    kicked.insert(kicked.end(), order.begin() + d, order.end());
+
+    order.swap(kicked);
+    return;
+  }
+
+  // End-fixed kick: preserve order[0] (start) and order[n-1] (fixed end).
+  if (n < 9) {
+    std::shuffle(order.begin() + 1, order.end() - 1, rng);
+    return;
+  }
+
+  std::vector<std::size_t> core(order.begin() + 1, order.end() - 1);
+  const std::size_t m = core.size();
+  if (m < 8) {
+    std::shuffle(core.begin(), core.end(), rng);
+    std::vector<std::size_t> kicked;
+    kicked.reserve(n);
+    kicked.push_back(order.front());
+    kicked.insert(kicked.end(), core.begin(), core.end());
+    kicked.push_back(order.back());
+    order.swap(kicked);
+    return;
+  }
+
+  std::uniform_int_distribution<std::size_t> dist(1, m - 1);
   std::size_t a = dist(rng);
   std::size_t b = dist(rng);
   std::size_t c = dist(rng);
@@ -728,11 +1587,13 @@ void scanOptDoubleBridgeKick(std::vector<std::size_t>& order,
 
   std::vector<std::size_t> kicked;
   kicked.reserve(n);
-  kicked.insert(kicked.end(), order.begin(), order.begin() + a);
-  kicked.insert(kicked.end(), order.begin() + b, order.begin() + c);
-  kicked.insert(kicked.end(), order.begin() + a, order.begin() + b);
-  kicked.insert(kicked.end(), order.begin() + c, order.begin() + d);
-  kicked.insert(kicked.end(), order.begin() + d, order.end());
+  kicked.push_back(order.front());
+  kicked.insert(kicked.end(), core.begin(), core.begin() + a);
+  kicked.insert(kicked.end(), core.begin() + b, core.begin() + c);
+  kicked.insert(kicked.end(), core.begin() + a, core.begin() + b);
+  kicked.insert(kicked.end(), core.begin() + c, core.begin() + d);
+  kicked.insert(kicked.end(), core.begin() + d, core.end());
+  kicked.push_back(order.back());
 
   order.swap(kicked);
 }
@@ -795,45 +1656,141 @@ std::vector<std::size_t> orderNodesByCost(
     return n == 1 ? std::vector<std::size_t>{0} : std::vector<std::size_t>{};
   }
 
+  const bool end_fixed = static_cast<bool>(terminal_cost);
+  const std::size_t scanopt_n = end_fixed ? (n + 1) : n;
   const bool use_scanopt
       = (config.getScanOrderSolver()
              == ScanArchitectConfig::ScanOrderSolver::ScanOpt
-         && n <= kScanOptMaxMatrixCells && !terminal_cost);
+         && scanopt_n <= kScanOptMaxMatrixCells);
 
   if (use_scanopt) {
+    const auto deadline = scanOptDeadline(config);
+
     ScanOptMatrix m;
-    m.n = n;
-    m.costs.resize(n * n);
-    for (std::size_t i = 0; i < n; ++i) {
-      for (std::size_t j = 0; j < n; ++j) {
+    m.n = scanopt_n;
+    m.costs.resize(scanopt_n * scanopt_n);
+    for (std::size_t i = 0; i < scanopt_n; ++i) {
+      for (std::size_t j = 0; j < scanopt_n; ++j) {
         if (i == j) {
-          m.costs[i * n + j] = kScanOptLargeCost;
+          m.costs[i * scanopt_n + j] = kScanOptLargeCost;
           continue;
         }
-        const int64_t cost = cost_fn(i, j);
-        m.costs[i * n + j]
+        int64_t cost = kInfDistance;
+        if (end_fixed && i == n) {
+          cost = kInfDistance;
+        } else if (end_fixed && j == n) {
+          cost = terminal_cost(i);
+        } else {
+          cost = cost_fn(i, j);
+        }
+        m.costs[i * scanopt_n + j]
             = static_cast<int32_t>(std::min<int64_t>(cost, kScanOptLargeCost));
       }
     }
 
+    std::vector<std::string_view> scanopt_names = names;
+    static constexpr std::string_view kEndName = "__end__";
+    if (end_fixed) {
+      scanopt_names.push_back(kEndName);
+    }
+
     std::vector<std::size_t> best_order
-        = scanOptGreedyOrder(m, start, names, logger);
-    scanOptDescent(m, names, best_order);
+        = end_fixed ? scanOptGreedyOrderEndFixed(m,
+                                                 start,
+                                                 n,
+                                                 scanopt_names,
+                                                 logger)
+                    : scanOptGreedyOrder(m, start, scanopt_names, logger);
+    scanOptDescent(m, scanopt_names, best_order, end_fixed, deadline);
     int64_t best_cost = scanOptPathCost(m, best_order);
 
     std::mt19937_64 rng(config.getScanOptSeed());
     const uint64_t rounds = config.getScanOptRounds();
-    for (uint64_t r = 0; r < rounds; ++r) {
-      std::vector<std::size_t> cand = best_order;
-      scanOptDoubleBridgeKick(cand, rng);
-      scanOptDescent(m, names, cand);
-      const int64_t cand_cost = scanOptPathCost(m, cand);
-      if (cand_cost < best_cost) {
-        best_cost = cand_cost;
-        best_order.swap(cand);
+    if (!config.getScanOptTempControl()) {
+      for (uint64_t r = 0; r < rounds; ++r) {
+        if (scanOptTimeExpired(deadline)) {
+          break;
+        }
+        std::vector<std::size_t> cand = best_order;
+        scanOptDoubleBridgeKick(cand, rng, end_fixed);
+        scanOptDescent(m, scanopt_names, cand, end_fixed, deadline);
+        const int64_t cand_cost = scanOptPathCost(m, cand);
+        if (cand_cost < best_cost) {
+          best_cost = cand_cost;
+          best_order.swap(cand);
+        }
+      }
+    } else {
+      constexpr int kNoImproveBeforeTemp = 3;
+      constexpr int kTempSteps = 3;
+
+      std::vector<std::size_t> cur_order = best_order;
+      int64_t cur_cost = best_cost;
+
+      double temperature = 0.0;
+      int no_improve = 0;
+      int temp_steps_left = 0;
+
+      const double t_div = config.getScanOptTDiv();
+      std::uniform_real_distribution<double> u01(0.0, 1.0);
+
+      for (uint64_t r = 0; r < rounds; ++r) {
+        if (scanOptTimeExpired(deadline)) {
+          break;
+        }
+        std::vector<std::size_t> cand = cur_order;
+        scanOptDoubleBridgeKick(cand, rng, end_fixed);
+        scanOptDescent(m, scanopt_names, cand, end_fixed, deadline);
+        const int64_t cand_cost = scanOptPathCost(m, cand);
+
+        const int64_t delta = cand_cost - cur_cost;
+        if (delta < 0) {
+          cur_order.swap(cand);
+          cur_cost = cand_cost;
+          temperature = 0.0;
+          no_improve = 0;
+          temp_steps_left = 0;
+        } else {
+          no_improve++;
+          if (temperature == 0.0 && no_improve >= kNoImproveBeforeTemp) {
+            temperature = static_cast<double>(cur_cost) / t_div;
+            temp_steps_left = kTempSteps;
+            no_improve = 0;
+          }
+
+          bool accept = false;
+          if (temperature > 0.0) {
+            const double prob
+                = std::exp(-static_cast<double>(delta) / temperature);
+            accept = u01(rng) < prob;
+            if (--temp_steps_left <= 0) {
+              temperature = 0.0;
+              no_improve = 0;
+            }
+          }
+          if (accept) {
+            cur_order.swap(cand);
+            cur_cost = cand_cost;
+          }
+        }
+
+        if (cur_cost < best_cost) {
+          best_cost = cur_cost;
+          best_order = cur_order;
+        }
       }
     }
 
+    if (end_fixed) {
+      if (!best_order.empty() && best_order.back() == n) {
+        best_order.pop_back();
+      } else {
+        logger->warn(utl::DFT,
+                     209,
+                     "Internal error: expected fixed-end node at end of "
+                     "ScanOpt order; leaving order unchanged.");
+      }
+    }
     return best_order;
   }
 
@@ -1472,12 +2429,23 @@ void OptimizeScanWirelengthPinToNet(std::vector<std::unique_ptr<ScanCell>>& cell
 
   std::optional<odb::Point> begin;
   std::optional<odb::Point> end;
+  odb::dbBlock* endpoint_block = nullptr;
+  if (endpoints.has_value()) {
+    if ((endpoints->begin.has_value()
+         && endpoints->begin->type
+                == ScanArchitectConfig::ChainEndpoint::Type::Term)
+        || (endpoints->end.has_value()
+            && endpoints->end->type
+                   == ScanArchitectConfig::ChainEndpoint::Type::Term)) {
+      endpoint_block = InferBlockFromPlacedCells(cells);
+    }
+  }
   if (endpoints.has_value()) {
     if (endpoints->begin.has_value()) {
-      begin = odb::Point(endpoints->begin->x, endpoints->begin->y);
+      begin = EndpointPoint(*endpoints->begin, endpoint_block, logger);
     }
     if (endpoints->end.has_value()) {
-      end = odb::Point(endpoints->end->x, endpoints->end->y);
+      end = EndpointPoint(*endpoints->end, endpoint_block, logger);
     }
   }
 
@@ -1506,6 +2474,8 @@ void OptimizeScanWirelengthPinToNet(std::vector<std::unique_ptr<ScanCell>>& cell
   }
 
   const double vertical_weight = config.getVerticalWeight();
+  const int64_t local_scale
+      = estimateLocalManhattanScale(scan_in_pts, vertical_weight);
 
   std::size_t start_index = 0;
   int64_t lowest = std::numeric_limits<int64_t>::max();
@@ -1533,16 +2503,23 @@ void OptimizeScanWirelengthPinToNet(std::vector<std::unique_ptr<ScanCell>>& cell
   }
 
   const auto edge_cost = [&](std::size_t src, std::size_t dst) -> int64_t {
-    const int64_t dist
+    // Routing-aware + placement-aware hybrid cost:
+    // - pin-to-net distance approximates incremental branch length to attach a
+    //   new scan-in load onto the already-routed scan-out (often Q) net, and
+    // - direct pin-to-pin Manhattan encourages spatial locality to avoid
+    //   visually/physically "jumpy" chains when many candidates tie at 0 in the
+    //   pin-to-net metric (e.g., long functional nets spanning the core).
+    const int64_t p2n
         = pinToNetDistance(scan_in_pts[dst], net_geoms[src], vertical_weight);
-    if (dist != 0 || !net_geoms[src].boxes.empty()
+    const int64_t man
+        = manhattanDist(scan_out_pts[src], scan_in_pts[dst], vertical_weight);
+    const int64_t jump_pen = jumpPenaltyFromManhattan(man, local_scale);
+    if (p2n != 0 || !net_geoms[src].boxes.empty()
         || !net_geoms[src].terminals.empty()) {
-      return scaleEdgeCost(dist, timing_mul[src]);
+      return scaleEdgeCost(p2n + man + jump_pen, timing_mul[src]);
     }
     // No routing/pin geometry available; fall back to pin-based Manhattan.
-    return scaleEdgeCost(
-        manhattanDist(scan_out_pts[src], scan_in_pts[dst], vertical_weight),
-        timing_mul[src]);
+    return scaleEdgeCost(man + jump_pen, timing_mul[src]);
   };
 
   if (hasScanOrderConstraints(config)) {
@@ -1563,57 +2540,175 @@ void OptimizeScanWirelengthPinToNet(std::vector<std::unique_ptr<ScanCell>>& cell
 
   if (config.getScanOrderSolver()
       == ScanArchitectConfig::ScanOrderSolver::ScanOpt) {
-    if (end.has_value()) {
-      logger->warn(
-          utl::DFT,
-          186,
-          "ScanOpt ordering does not currently support EndPort costs; falling "
-          "back to heuristic ordering.");
-    } else if (n > kScanOptMaxMatrixCells) {
+    const auto deadline = scanOptDeadline(config);
+
+    const bool have_begin = begin.has_value();
+    const bool have_end = end.has_value();
+    const bool end_fixed = have_end;
+    const std::size_t scanopt_n
+        = n + (have_begin ? 1 : 0) + (have_end ? 1 : 0);
+    if (scanopt_n > kScanOptMaxMatrixCells) {
       logger->warn(
           utl::DFT,
           72,
           "ScanOpt ordering requested for {} cells, which exceeds the current "
           "matrix limit {}. Falling back to heuristic ordering.",
-          n,
+          scanopt_n,
           kScanOptMaxMatrixCells);
     } else {
+      const std::size_t begin_node = have_begin ? n : 0;
+      const std::size_t end_node = have_end ? (n + (have_begin ? 1 : 0)) : 0;
+      const std::size_t start_node = have_begin ? begin_node : start_index;
+
       ScanOptMatrix m;
-      m.n = n;
-      m.costs.resize(n * n);
-      for (std::size_t i = 0; i < n; ++i) {
-        for (std::size_t j = 0; j < n; ++j) {
+      m.n = scanopt_n;
+      m.costs.resize(scanopt_n * scanopt_n);
+      for (std::size_t i = 0; i < scanopt_n; ++i) {
+        for (std::size_t j = 0; j < scanopt_n; ++j) {
           if (i == j) {
-            m.costs[i * n + j] = kScanOptLargeCost;
+            m.costs[i * scanopt_n + j] = kScanOptLargeCost;
             continue;
           }
-          const int64_t cost = edge_cost(i, j);
-          m.costs[i * n + j]
+          int64_t cost = kInfDistance;
+          if (have_begin && i == begin_node) {
+            if (j < n) {
+              const int64_t man
+                  = manhattanDist(begin.value(), scan_in_pts[j], vertical_weight);
+              const int64_t jump_pen = jumpPenaltyFromManhattan(man, local_scale);
+              cost = man + jump_pen;
+            } else {
+              cost = kInfDistance;
+            }
+          } else if (have_begin && j == begin_node) {
+            cost = kInfDistance;  // never enter begin node
+          } else if (end_fixed && i == end_node) {
+            cost = kInfDistance;  // don't leave the fixed end node
+          } else if (end_fixed && j == end_node) {
+            if (i < n) {
+              const int64_t man
+                  = manhattanDist(scan_out_pts[i], end.value(), vertical_weight);
+              const int64_t jump_pen = jumpPenaltyFromManhattan(man, local_scale);
+              cost = scaleEdgeCost(man + jump_pen, timing_mul[i]);
+            } else {
+              cost = kInfDistance;
+            }
+          } else {
+            cost = edge_cost(i, j);
+          }
+          m.costs[i * scanopt_n + j]
               = static_cast<int32_t>(std::min<int64_t>(cost, kScanOptLargeCost));
         }
       }
 
+      std::vector<std::string_view> scanopt_names = names;
+      static constexpr std::string_view kBeginName = "__begin__";
+      static constexpr std::string_view kEndName = "__end__";
+      if (have_begin) {
+        scanopt_names.push_back(kBeginName);
+      }
+      if (end_fixed) {
+        scanopt_names.push_back(kEndName);
+      }
+
       std::vector<std::size_t> best_order
-          = scanOptGreedyOrder(m, start_index, names, logger);
-      scanOptDescent(m, names, best_order);
+          = end_fixed ? scanOptGreedyOrderEndFixed(m,
+                                                   start_node,
+                                                   end_node,
+                                                   scanopt_names,
+                                                   logger)
+                      : scanOptGreedyOrder(m,
+                                           start_node,
+                                           scanopt_names,
+                                           logger);
+      scanOptDescent(m, scanopt_names, best_order, end_fixed, deadline);
       int64_t best_cost = scanOptPathCost(m, best_order);
 
       std::mt19937_64 rng(config.getScanOptSeed());
       const uint64_t rounds = config.getScanOptRounds();
-      for (uint64_t r = 0; r < rounds; ++r) {
-        std::vector<std::size_t> cand = best_order;
-        scanOptDoubleBridgeKick(cand, rng);
-        scanOptDescent(m, names, cand);
-        const int64_t cand_cost = scanOptPathCost(m, cand);
-        if (cand_cost < best_cost) {
-          best_cost = cand_cost;
-          best_order.swap(cand);
+      if (!config.getScanOptTempControl()) {
+        for (uint64_t r = 0; r < rounds; ++r) {
+          if (scanOptTimeExpired(deadline)) {
+            break;
+          }
+          std::vector<std::size_t> cand = best_order;
+          scanOptDoubleBridgeKick(cand, rng, end_fixed);
+          scanOptDescent(m, scanopt_names, cand, end_fixed, deadline);
+          const int64_t cand_cost = scanOptPathCost(m, cand);
+          if (cand_cost < best_cost) {
+            best_cost = cand_cost;
+            best_order.swap(cand);
+          }
+        }
+      } else {
+        constexpr int kNoImproveBeforeTemp = 3;
+        constexpr int kTempSteps = 3;
+
+        std::vector<std::size_t> cur_order = best_order;
+        int64_t cur_cost = best_cost;
+
+        double temperature = 0.0;
+        int no_improve = 0;
+        int temp_steps_left = 0;
+
+        const double t_div = config.getScanOptTDiv();
+        std::uniform_real_distribution<double> u01(0.0, 1.0);
+
+        for (uint64_t r = 0; r < rounds; ++r) {
+          if (scanOptTimeExpired(deadline)) {
+            break;
+          }
+          std::vector<std::size_t> cand = cur_order;
+          scanOptDoubleBridgeKick(cand, rng, end_fixed);
+          scanOptDescent(m, scanopt_names, cand, end_fixed, deadline);
+          const int64_t cand_cost = scanOptPathCost(m, cand);
+
+          const int64_t delta = cand_cost - cur_cost;
+          if (delta < 0) {
+            cur_order.swap(cand);
+            cur_cost = cand_cost;
+            temperature = 0.0;
+            no_improve = 0;
+            temp_steps_left = 0;
+          } else {
+            no_improve++;
+            if (temperature == 0.0 && no_improve >= kNoImproveBeforeTemp) {
+              temperature = static_cast<double>(cur_cost) / t_div;
+              temp_steps_left = kTempSteps;
+              no_improve = 0;
+            }
+
+            bool accept = false;
+            if (temperature > 0.0) {
+              const double prob
+                  = std::exp(-static_cast<double>(delta) / temperature);
+              accept = u01(rng) < prob;
+              if (--temp_steps_left <= 0) {
+                temperature = 0.0;
+                no_improve = 0;
+              }
+            }
+            if (accept) {
+              cur_order.swap(cand);
+              cur_cost = cand_cost;
+            }
+          }
+
+          if (cur_cost < best_cost) {
+            best_cost = cur_cost;
+            best_order = cur_order;
+          }
         }
       }
 
       std::vector<std::unique_ptr<ScanCell>> ordered;
       ordered.reserve(n);
+      if (!begin.has_value() && !end.has_value()) {
+        rotateOrderToDropWorstEdge(best_order, names, edge_cost);
+      }
       for (const std::size_t idx : best_order) {
+        if (idx >= n) {
+          continue;
+        }
         ordered.emplace_back(std::move(cells[idx]));
       }
       std::swap(cells, ordered);
@@ -1621,81 +2716,344 @@ void OptimizeScanWirelengthPinToNet(std::vector<std::unique_ptr<ScanCell>>& cell
     }
   }
 
-  std::vector<std::size_t> order;
-  order.reserve(n);
-  std::vector<bool> used(n, false);
+  const bool end_fixed = end.has_value();
+  const auto terminal_cost = [&](std::size_t idx) -> int64_t {
+    if (!end_fixed) {
+      return 0;
+    }
+    return manhattanDist(scan_out_pts[idx], end.value(), vertical_weight);
+  };
+  const auto no_next_scan_cell = [&]() -> void {
+    logger->error(utl::DFT, 17, "Couldn't find next scan cell to order");
+  };
 
-  std::size_t cur = start_index;
-  used[cur] = true;
-  order.push_back(cur);
+  const auto path_cost = [&](const std::vector<std::size_t>& order) -> int64_t {
+    int64_t total = 0;
+    for (std::size_t i = 1; i < order.size(); ++i) {
+      total += edge_cost(order[i - 1], order[i]);
+    }
+    if (end_fixed && !order.empty()) {
+      total += terminal_cost(order.back());
+    }
+    return total;
+  };
 
-  while (order.size() < n) {
-    bool found = false;
-    std::size_t best = 0;
-    int64_t best_cost = kInfDistance;
-    const bool last_step = (order.size() + 1 == n);
+  const auto greedy_nn_order = [&]() -> std::vector<std::size_t> {
+    std::vector<std::size_t> order;
+    order.reserve(n);
+    std::vector<bool> used(n, false);
 
+    std::size_t cur = start_index;
+    used[cur] = true;
+    order.push_back(cur);
+
+    while (order.size() < n) {
+      bool found = false;
+      std::size_t best = 0;
+      int64_t best_cost = kInfDistance;
+      const bool last_step = (order.size() + 1 == n);
+
+      for (std::size_t i = 0; i < n; ++i) {
+        if (used[i]) {
+          continue;
+        }
+        int64_t cost = edge_cost(cur, i);
+        if (end_fixed && last_step) {
+          cost += terminal_cost(i);
+        }
+        if (!found || cost < best_cost
+            || (cost == best_cost && names[i] < names[best])) {
+          found = true;
+          best = i;
+          best_cost = cost;
+        }
+      }
+
+      if (!found) {
+        no_next_scan_cell();
+      }
+
+      used[best] = true;
+      order.push_back(best);
+      cur = best;
+    }
+
+    return order;
+  };
+
+  const auto farthest_insertion_order = [&]() -> std::vector<std::size_t> {
+    std::vector<std::size_t> order;
+    order.reserve(n);
+    std::vector<bool> in_path(n, false);
+
+    order.push_back(start_index);
+    in_path[start_index] = true;
+
+    if (n == 1) {
+      return order;
+    }
+
+    std::size_t farthest = start_index;
+    int64_t farthest_dist = -1;
     for (std::size_t i = 0; i < n; ++i) {
-      if (used[i]) {
+      if (i == start_index) {
         continue;
       }
-      int64_t cost = edge_cost(cur, i);
-      if (end.has_value() && last_step) {
-        cost += manhattanDist(scan_out_pts[i], end.value(), vertical_weight);
-      }
-      if (!found || cost < best_cost
-          || (cost == best_cost && names[i] < names[best])) {
-        found = true;
-        best = i;
-        best_cost = cost;
+      const int64_t dist = manhattanDist(scan_in_pts[start_index],
+                                         scan_in_pts[i],
+                                         vertical_weight);
+      if (dist > farthest_dist
+          || (dist == farthest_dist && names[i] < names[farthest])) {
+        farthest = i;
+        farthest_dist = dist;
       }
     }
 
-    if (!found) {
-      logger->error(utl::DFT, 17, "Couldn't find next scan cell to order");
+    order.push_back(farthest);
+    in_path[farthest] = true;
+
+    std::vector<int64_t> nearest_dist(n, std::numeric_limits<int64_t>::max());
+    for (std::size_t i = 0; i < n; ++i) {
+      if (in_path[i]) {
+        nearest_dist[i] = 0;
+        continue;
+      }
+      nearest_dist[i]
+          = std::min(manhattanDist(scan_in_pts[i],
+                                   scan_in_pts[start_index],
+                                   vertical_weight),
+                     manhattanDist(scan_in_pts[i],
+                                   scan_in_pts[farthest],
+                                   vertical_weight));
     }
 
-    used[best] = true;
-    order.push_back(best);
-    cur = best;
+    while (order.size() < n) {
+      std::size_t next = start_index;
+      bool found = false;
+      int64_t best_score = -1;
+      for (std::size_t i = 0; i < n; ++i) {
+        if (in_path[i]) {
+          continue;
+        }
+        const int64_t score = nearest_dist[i];
+        if (!found || score > best_score
+            || (score == best_score && names[i] < names[next])) {
+          next = i;
+          best_score = score;
+          found = true;
+        }
+      }
+      if (!found) {
+        no_next_scan_cell();
+      }
+
+      // Insert at the position that minimises the path length increase.
+      std::size_t best_pos = order.size();  // append by default
+      int64_t best_delta = edge_cost(order.back(), next);
+      if (end_fixed) {
+        best_delta += terminal_cost(next) - terminal_cost(order.back());
+      }
+
+      for (std::size_t pos = 0; pos + 1 < order.size(); ++pos) {
+        const auto a = order[pos];
+        const auto b = order[pos + 1];
+        const int64_t delta
+            = edge_cost(a, next) + edge_cost(next, b) - edge_cost(a, b);
+        if (delta < best_delta || (delta == best_delta && pos + 1 < best_pos)) {
+          best_delta = delta;
+          best_pos = pos + 1;
+        }
+      }
+
+      order.insert(order.begin() + static_cast<std::ptrdiff_t>(best_pos), next);
+      in_path[next] = true;
+
+      for (std::size_t i = 0; i < n; ++i) {
+        if (in_path[i]) {
+          continue;
+        }
+        const int64_t dist
+            = manhattanDist(scan_in_pts[i], scan_in_pts[next], vertical_weight);
+        nearest_dist[i] = std::min(nearest_dist[i], dist);
+      }
+    }
+
+    // Keep the start fixed as the first element.
+    if (!order.empty() && order.front() != start_index) {
+      const auto it = std::find(order.begin(), order.end(), start_index);
+      if (it != order.end()) {
+        std::rotate(order.begin(), it, order.end());
+      }
+    }
+
+    return order;
+  };
+
+  const auto two_opt_improve = [&](std::vector<std::size_t>& order,
+                                   int max_passes) -> void {
+    if (max_passes <= 0 || order.size() < 4) {
+      return;
+    }
+
+    const int64_t before = path_cost(order);
+    bool improved_any = false;
+
+    const auto two_opt_first_improve
+        = [&](std::vector<std::size_t>& ord) -> bool {
+      const std::size_t nn = ord.size();
+      if (nn < 4) {
+        return false;
+      }
+
+      std::vector<int64_t> forward_prefix(nn, 0);
+      std::vector<int64_t> rev_prefix(nn, 0);
+      for (std::size_t i = 1; i < nn; ++i) {
+        forward_prefix[i]
+            = forward_prefix[i - 1] + edge_cost(ord[i - 1], ord[i]);
+        rev_prefix[i] = rev_prefix[i - 1] + edge_cost(ord[i], ord[i - 1]);
+      }
+
+      const auto segment_forward = [&](std::size_t from,
+                                       std::size_t to) -> int64_t {
+        return forward_prefix[to] - forward_prefix[from];
+      };
+      const auto segment_reversed = [&](std::size_t from,
+                                        std::size_t to) -> int64_t {
+        return rev_prefix[to] - rev_prefix[from];
+      };
+
+      for (std::size_t i = 0; i + 2 < nn; ++i) {
+        for (std::size_t j = i + 2; j < nn; ++j) {
+          const std::size_t a = ord[i];
+          const std::size_t b = ord[i + 1];
+          const std::size_t c = ord[j];
+          const bool has_d = (j + 1 < nn);
+          const std::size_t d = has_d ? ord[j + 1] : 0;
+
+          const int64_t old_inside = segment_forward(i + 1, j);
+          const int64_t new_inside = segment_reversed(i + 1, j);
+
+          const int64_t old_edges
+              = edge_cost(a, b) + (has_d ? edge_cost(c, d) : 0)
+                + (!has_d && end_fixed ? terminal_cost(c) : 0);
+          const int64_t new_edges
+              = edge_cost(a, c) + (has_d ? edge_cost(b, d) : 0)
+                + (!has_d && end_fixed ? terminal_cost(b) : 0);
+
+          if (new_edges + new_inside < old_edges + old_inside) {
+            std::reverse(ord.begin() + static_cast<std::ptrdiff_t>(i + 1),
+                         ord.begin() + static_cast<std::ptrdiff_t>(j + 1));
+            return true;
+          }
+        }
+      }
+      return false;
+    };
+
+    for (int pass = 0; pass < max_passes; ++pass) {
+      if (!two_opt_first_improve(order)) {
+        break;
+      }
+      improved_any = true;
+    }
+
+    if (improved_any) {
+      const int64_t after = path_cost(order);
+      debugPrint(logger,
+                 utl::DFT,
+                 "scan_chain_opt",
+                 1,
+                 "OptimizeScanWirelengthPinToNet: 2-opt improved path length "
+                 "{} -> {} ({} cells)",
+                 before,
+                 after,
+                 order.size());
+    }
+  };
+
+  int two_opt_passes = 0;
+  if (n <= kTwoOptMaxCellsFor3Passes) {
+    two_opt_passes = 3;
+  } else if (n <= kTwoOptMaxCellsFor2Passes) {
+    two_opt_passes = 2;
+  } else if (n <= kTwoOptMaxCellsFor1Pass) {
+    two_opt_passes = 1;
   }
 
-  // Local improvement: repeated adjacent swaps (directional 2-opt-lite).
-  for (int pass = 0; pass < 3; ++pass) {
-    bool improved = false;
-    for (std::size_t pos = 1; pos + 1 < order.size(); ++pos) {
-      const std::size_t prev = order[pos - 1];
-      const std::size_t a = order[pos];
-      const std::size_t b = order[pos + 1];
-      const bool has_next = (pos + 2 < order.size());
-      const std::size_t next = has_next ? order[pos + 2] : 0;
+  std::vector<std::size_t> best_order;
+  if (n <= kQuadraticHeuristicMaxCells) {
+    best_order = greedy_nn_order();
+    two_opt_improve(best_order, two_opt_passes);
+    int64_t best_cost = path_cost(best_order);
 
-      const int64_t before
-          = edge_cost(prev, a) + edge_cost(a, b)
-            + (has_next ? edge_cost(b, next) : 0)
-            + (!has_next && end.has_value()
-                   ? manhattanDist(scan_out_pts[b], end.value(), vertical_weight)
-                   : 0);
-      const int64_t after
-          = edge_cost(prev, b) + edge_cost(b, a)
-            + (has_next ? edge_cost(a, next) : 0)
-            + (!has_next && end.has_value()
-                   ? manhattanDist(scan_out_pts[a], end.value(), vertical_weight)
-                   : 0);
-
-      if (after < before) {
-        std::swap(order[pos], order[pos + 1]);
-        improved = true;
+    if (n <= kFarthestInsertionMaxCells) {
+      std::vector<std::size_t> fi_order = farthest_insertion_order();
+      two_opt_improve(fi_order, two_opt_passes);
+      const int64_t fi_cost = path_cost(fi_order);
+      if (fi_cost < best_cost) {
+        best_cost = fi_cost;
+        best_order = std::move(fi_order);
       }
     }
-    if (!improved) {
-      break;
+  } else {
+    // Large-chain fallback: rtree greedy ordering with a Manhattan-aware choice
+    // among the nearest Euclidean candidates.
+    using Point = bg::model::point<int, 2, bg::cs::cartesian>;
+    std::vector<std::pair<Point, std::size_t>> transformed;
+    transformed.reserve(n);
+    for (std::size_t i = 0; i < n; ++i) {
+      const auto& p = scan_in_pts[i];
+      transformed.emplace_back(Point(p.x(), p.y()), i);
+    }
+    bgi::rtree<std::pair<Point, std::size_t>, bgi::rstar<4>> rtree(transformed);
+    auto cursor = transformed[start_index];
+    rtree.remove(cursor);
+
+    best_order.reserve(n);
+    best_order.push_back(cursor.second);
+
+    while (best_order.size() < n) {
+      bool found = false;
+      std::pair<Point, std::size_t> best = cursor;
+      int64_t best_cost = kInfDistance;
+      const std::size_t cursor_idx = cursor.second;
+      const odb::Point cursor_out = scan_out_pts[cursor_idx];
+      const Point query_pt(cursor_out.x(), cursor_out.y());
+      const bool last_step = (best_order.size() + 1 == n);
+
+      for (auto it
+           = rtree.qbegin(bgi::nearest(query_pt, kNearestCandidateCount));
+           it != rtree.qend();
+           ++it) {
+        const auto cand = *it;
+        int64_t cost = edge_cost(cursor_idx, cand.second);
+        if (end_fixed && last_step) {
+          cost += terminal_cost(cand.second);
+        }
+        if (!found || cost < best_cost
+            || (cost == best_cost && names[cand.second] < names[best.second])) {
+          best = cand;
+          best_cost = cost;
+          found = true;
+        }
+      }
+
+      if (!found) {
+        no_next_scan_cell();
+      }
+
+      cursor = best;
+      rtree.remove(cursor);
+      best_order.push_back(cursor.second);
     }
   }
 
   std::vector<std::unique_ptr<ScanCell>> ordered;
   ordered.reserve(n);
-  for (const std::size_t idx : order) {
+  if (!begin.has_value() && !end.has_value()) {
+    rotateOrderToDropWorstEdge(best_order, names, edge_cost);
+  }
+  for (const std::size_t idx : best_order) {
     ordered.emplace_back(std::move(cells[idx]));
   }
   std::swap(cells, ordered);
@@ -1737,16 +3095,6 @@ void OptimizeScanWirelength(
     return manhattanDist(a, b, vertical_weight);
   };
 
-  const auto path_len = [&](const std::vector<std::size_t>& order,
-                            const std::vector<odb::Point>& scan_in_pts,
-                            const std::vector<odb::Point>& scan_out_pts) -> int64_t {
-    int64_t total = 0;
-    for (std::size_t i = 1; i < order.size(); ++i) {
-      total += manhattan(scan_out_pts[order[i - 1]], scan_in_pts[order[i]]);
-    }
-    return total;
-  };
-
   const auto no_next_scan_cell = [&]() -> void {
     logger->error(utl::DFT, 16, "Couldn't find next scan cell to order");
   };
@@ -1761,7 +3109,7 @@ void OptimizeScanWirelength(
   std::vector<std::string_view> names;
   names.reserve(n);
   std::vector<double> timing_mul;
-  timing_mul.reserve(n);
+    timing_mul.reserve(n);
   for (const auto& cell : cells) {
     origins.emplace_back(cell->getOrigin());
     scan_in_pts.emplace_back(scanPinLocation(cell->getScanIn(), origins.back()));
@@ -1770,31 +3118,36 @@ void OptimizeScanWirelength(
     names.emplace_back(cell->getName());
     timing_mul.emplace_back(timingMultiplierForCell(config, *cell));
   }
+  const int64_t local_scale
+      = estimateLocalManhattanScale(scan_in_pts, vertical_weight);
 
   std::optional<odb::Point> begin;
   std::optional<odb::Point> end;
+  odb::dbBlock* endpoint_block = nullptr;
+  if (endpoints.has_value()) {
+    if ((endpoints->begin.has_value()
+         && endpoints->begin->type
+                == ScanArchitectConfig::ChainEndpoint::Type::Term)
+        || (endpoints->end.has_value()
+            && endpoints->end->type
+                   == ScanArchitectConfig::ChainEndpoint::Type::Term)) {
+      endpoint_block = InferBlockFromPlacedCells(cells);
+    }
+  }
   if (endpoints.has_value()) {
     if (endpoints->begin.has_value()) {
-      begin = odb::Point(endpoints->begin->x, endpoints->begin->y);
+      begin = EndpointPoint(*endpoints->begin, endpoint_block, logger);
     }
     if (endpoints->end.has_value()) {
-      end = odb::Point(endpoints->end->x, endpoints->end->y);
+      end = EndpointPoint(*endpoints->end, endpoint_block, logger);
     }
   }
 
   const auto edge_cost = [&](std::size_t src, std::size_t dst) -> int64_t {
-    return scaleEdgeCost(manhattan(scan_out_pts[src], scan_in_pts[dst]),
-                         timing_mul[src]);
+    const int64_t man = manhattan(scan_out_pts[src], scan_in_pts[dst]);
+    const int64_t jump_pen = jumpPenaltyFromManhattan(man, local_scale);
+    return scaleEdgeCost(man + jump_pen, timing_mul[src]);
   };
-
-  bool directional_pins = false;
-  for (std::size_t i = 0; i < n; ++i) {
-    if (scan_in_pts[i].x() != scan_out_pts[i].x()
-        || scan_in_pts[i].y() != scan_out_pts[i].y()) {
-      directional_pins = true;
-      break;
-    }
-  }
 
   if (hasScanOrderConstraints(config)) {
     optimizeScanWirelengthWithConstraints(
@@ -1843,57 +3196,175 @@ void OptimizeScanWirelength(
 
   if (config.getScanOrderSolver()
       == ScanArchitectConfig::ScanOrderSolver::ScanOpt) {
-    if (end.has_value()) {
-      logger->warn(
-          utl::DFT,
-          187,
-          "ScanOpt ordering does not currently support EndPort costs; falling "
-          "back to heuristic ordering.");
-    } else if (n > kScanOptMaxMatrixCells) {
+    const auto deadline = scanOptDeadline(config);
+
+    const bool have_begin = begin.has_value();
+    const bool have_end = end.has_value();
+    const bool end_fixed = have_end;
+    const std::size_t scanopt_n
+        = n + (have_begin ? 1 : 0) + (have_end ? 1 : 0);
+    if (scanopt_n > kScanOptMaxMatrixCells) {
       logger->warn(
           utl::DFT,
           185,
           "ScanOpt ordering requested for {} cells, which exceeds the current "
           "matrix limit {}. Falling back to heuristic ordering.",
-          n,
+          scanopt_n,
           kScanOptMaxMatrixCells);
     } else {
+      const std::size_t begin_node = have_begin ? n : 0;
+      const std::size_t end_node = have_end ? (n + (have_begin ? 1 : 0)) : 0;
+      const std::size_t start_node = have_begin ? begin_node : start_index;
+
       ScanOptMatrix m;
-      m.n = n;
-      m.costs.resize(n * n);
-      for (std::size_t i = 0; i < n; ++i) {
-        for (std::size_t j = 0; j < n; ++j) {
+      m.n = scanopt_n;
+      m.costs.resize(scanopt_n * scanopt_n);
+      for (std::size_t i = 0; i < scanopt_n; ++i) {
+        for (std::size_t j = 0; j < scanopt_n; ++j) {
           if (i == j) {
-            m.costs[i * n + j] = kScanOptLargeCost;
+            m.costs[i * scanopt_n + j] = kScanOptLargeCost;
             continue;
           }
-          const int64_t cost = edge_cost(i, j);
-          m.costs[i * n + j]
+          int64_t cost = kInfDistance;
+          if (have_begin && i == begin_node) {
+            if (j < n) {
+              const int64_t man
+                  = manhattanDist(begin.value(), scan_in_pts[j], vertical_weight);
+              const int64_t jump_pen = jumpPenaltyFromManhattan(man, local_scale);
+              cost = man + jump_pen;
+            } else {
+              cost = kInfDistance;
+            }
+          } else if (have_begin && j == begin_node) {
+            cost = kInfDistance;  // never enter begin node
+          } else if (end_fixed && i == end_node) {
+            cost = kInfDistance;  // don't leave the fixed end node
+          } else if (end_fixed && j == end_node) {
+            if (i < n) {
+              const int64_t man
+                  = manhattanDist(scan_out_pts[i], end.value(), vertical_weight);
+              const int64_t jump_pen = jumpPenaltyFromManhattan(man, local_scale);
+              cost = scaleEdgeCost(man + jump_pen, timing_mul[i]);
+            } else {
+              cost = kInfDistance;
+            }
+          } else {
+            cost = edge_cost(i, j);
+          }
+          m.costs[i * scanopt_n + j]
               = static_cast<int32_t>(std::min<int64_t>(cost, kScanOptLargeCost));
         }
       }
 
+      std::vector<std::string_view> scanopt_names = names;
+      static constexpr std::string_view kBeginName = "__begin__";
+      static constexpr std::string_view kEndName = "__end__";
+      if (have_begin) {
+        scanopt_names.push_back(kBeginName);
+      }
+      if (end_fixed) {
+        scanopt_names.push_back(kEndName);
+      }
+
       std::vector<std::size_t> best_order
-          = scanOptGreedyOrder(m, start_index, names, logger);
-      scanOptDescent(m, names, best_order);
+          = end_fixed ? scanOptGreedyOrderEndFixed(m,
+                                                   start_node,
+                                                   end_node,
+                                                   scanopt_names,
+                                                   logger)
+                      : scanOptGreedyOrder(m,
+                                           start_node,
+                                           scanopt_names,
+                                           logger);
+      scanOptDescent(m, scanopt_names, best_order, end_fixed, deadline);
       int64_t best_cost = scanOptPathCost(m, best_order);
 
       std::mt19937_64 rng(config.getScanOptSeed());
       const uint64_t rounds = config.getScanOptRounds();
-      for (uint64_t r = 0; r < rounds; ++r) {
-        std::vector<std::size_t> cand = best_order;
-        scanOptDoubleBridgeKick(cand, rng);
-        scanOptDescent(m, names, cand);
-        const int64_t cand_cost = scanOptPathCost(m, cand);
-        if (cand_cost < best_cost) {
-          best_cost = cand_cost;
-          best_order.swap(cand);
+      if (!config.getScanOptTempControl()) {
+        for (uint64_t r = 0; r < rounds; ++r) {
+          if (scanOptTimeExpired(deadline)) {
+            break;
+          }
+          std::vector<std::size_t> cand = best_order;
+          scanOptDoubleBridgeKick(cand, rng, end_fixed);
+          scanOptDescent(m, scanopt_names, cand, end_fixed, deadline);
+          const int64_t cand_cost = scanOptPathCost(m, cand);
+          if (cand_cost < best_cost) {
+            best_cost = cand_cost;
+            best_order.swap(cand);
+          }
+        }
+      } else {
+        constexpr int kNoImproveBeforeTemp = 3;
+        constexpr int kTempSteps = 3;
+
+        std::vector<std::size_t> cur_order = best_order;
+        int64_t cur_cost = best_cost;
+
+        double temperature = 0.0;
+        int no_improve = 0;
+        int temp_steps_left = 0;
+
+        const double t_div = config.getScanOptTDiv();
+        std::uniform_real_distribution<double> u01(0.0, 1.0);
+
+        for (uint64_t r = 0; r < rounds; ++r) {
+          if (scanOptTimeExpired(deadline)) {
+            break;
+          }
+          std::vector<std::size_t> cand = cur_order;
+          scanOptDoubleBridgeKick(cand, rng, end_fixed);
+          scanOptDescent(m, scanopt_names, cand, end_fixed, deadline);
+          const int64_t cand_cost = scanOptPathCost(m, cand);
+
+          const int64_t delta = cand_cost - cur_cost;
+          if (delta < 0) {
+            cur_order.swap(cand);
+            cur_cost = cand_cost;
+            temperature = 0.0;
+            no_improve = 0;
+            temp_steps_left = 0;
+          } else {
+            no_improve++;
+            if (temperature == 0.0 && no_improve >= kNoImproveBeforeTemp) {
+              temperature = static_cast<double>(cur_cost) / t_div;
+              temp_steps_left = kTempSteps;
+              no_improve = 0;
+            }
+
+            bool accept = false;
+            if (temperature > 0.0) {
+              const double prob
+                  = std::exp(-static_cast<double>(delta) / temperature);
+              accept = u01(rng) < prob;
+              if (--temp_steps_left <= 0) {
+                temperature = 0.0;
+                no_improve = 0;
+              }
+            }
+            if (accept) {
+              cur_order.swap(cand);
+              cur_cost = cand_cost;
+            }
+          }
+
+          if (cur_cost < best_cost) {
+            best_cost = cur_cost;
+            best_order = cur_order;
+          }
         }
       }
 
       std::vector<std::unique_ptr<ScanCell>> ordered;
       ordered.reserve(n);
+      if (!begin.has_value() && !end.has_value()) {
+        rotateOrderToDropWorstEdge(best_order, names, edge_cost);
+      }
       for (const std::size_t idx : best_order) {
+        if (idx >= n) {
+          continue;
+        }
         ordered.emplace_back(std::move(cells[idx]));
       }
       std::swap(cells, ordered);
@@ -1901,43 +3372,12 @@ void OptimizeScanWirelength(
     }
   }
 
-  if (config.getScanOrderSolver()
-      == ScanArchitectConfig::ScanOrderSolver::MinFeedthrough) {
-    if (config.getTimingWeightSetup() != 0.0
-        || config.getTimingWeightHold() != 0.0) {
-      logger->warn(
-          utl::DFT,
-          188,
-          "Min-feedthrough ordering does not currently support timing-aware "
-          "penalties; falling back to heuristic ordering.");
-    } else {
-      const std::vector<std::size_t> order
-          = minFeedthroughRowSweepOrder(origins, names, vertical_weight);
-      if (order.size() == n) {
-        std::vector<std::unique_ptr<ScanCell>> ordered;
-        ordered.reserve(n);
-        for (const std::size_t idx : order) {
-          ordered.emplace_back(std::move(cells[idx]));
-        }
-        std::swap(cells, ordered);
-        return;
-      }
-      logger->warn(utl::DFT,
-                   189,
-                   "Min-feedthrough ordering failed (expected {} cells but got "
-                   "{}); falling back to heuristic ordering.",
-                   n,
-                   order.size());
-    }
-  }
-
   // Timing-aware ordering makes the objective asymmetric (penalizes outgoing
   // edges from timing-critical sources). EndPort costs also make the objective
-  // directional. When scan-in/out pins differ, scan_out->scan_in costs are also
   // directional. Use a directed greedy heuristic with a small local-improvement
   // pass rather than symmetric 2-opt/farthest-insertion moves.
   if (config.getTimingWeightSetup() != 0.0 || config.getTimingWeightHold() != 0.0
-      || end.has_value() || directional_pins) {
+      || end.has_value()) {
     std::vector<std::size_t> order;
     order.reserve(n);
     std::vector<bool> used(n, false);
@@ -2010,53 +3450,85 @@ void OptimizeScanWirelength(
 
     std::vector<std::unique_ptr<ScanCell>> ordered;
     ordered.reserve(n);
+    if (!begin.has_value() && !end.has_value()) {
+      rotateOrderToDropWorstEdge(order, names, edge_cost);
+    }
     for (const std::size_t idx : order) {
       ordered.emplace_back(std::move(cells[idx]));
     }
     std::swap(cells, ordered);
-    return;
-  }
+	    return;
+	  }
 
-  const auto greedy_nn_order
-      = [&](std::size_t start) -> std::vector<std::size_t> {
-    std::vector<std::size_t> order;
-    order.reserve(n);
-    std::vector<bool> used(n, false);
+	  const bool end_fixed = end.has_value();
+	  const auto terminal_cost = [&](std::size_t idx) -> int64_t {
+	    if (!end_fixed) {
+	      return 0;
+	    }
+	    return manhattan(scan_out_pts[idx], end.value());
+	  };
 
-    std::size_t cur = start;
-    used[cur] = true;
-    order.push_back(cur);
+	  const auto path_cost = [&](const std::vector<std::size_t>& order) -> int64_t {
+	    if (order.empty()) {
+	      return 0;
+	    }
+	    int64_t total = 0;
+	    if (begin.has_value()) {
+	      total += manhattan(begin.value(), scan_in_pts[order.front()]);
+	    }
+	    for (std::size_t i = 1; i < order.size(); ++i) {
+	      total += edge_cost(order[i - 1], order[i]);
+	    }
+	    if (end_fixed) {
+	      total += terminal_cost(order.back());
+	    }
+	    return total;
+	  };
 
-    while (order.size() < n) {
-      bool found = false;
-      std::size_t best = cur;
-      int64_t best_dist = std::numeric_limits<int64_t>::max();
-      for (std::size_t i = 0; i < n; ++i) {
-        if (used[i]) {
-          continue;
-        }
-        const int64_t dist = manhattan(scan_in_pts[cur], scan_in_pts[i]);
-        if (!found || dist < best_dist
-            || (dist == best_dist && names[i] < names[best])) {
-          best = i;
-          best_dist = dist;
-          found = true;
-        }
-      }
-      if (!found) {
+	  const auto greedy_nn_order
+	      = [&](std::size_t start) -> std::vector<std::size_t> {
+		    std::vector<std::size_t> order;
+		    order.reserve(n);
+		    std::vector<bool> used(n, false);
+
+	    std::size_t cur = start;
+	    used[cur] = true;
+	    order.push_back(cur);
+
+		    while (order.size() < n) {
+		      bool found = false;
+		      std::size_t best = cur;
+		      int64_t best_cost = std::numeric_limits<int64_t>::max();
+		      const bool last_step = (order.size() + 1 == n);
+		      for (std::size_t i = 0; i < n; ++i) {
+		        if (used[i]) {
+		          continue;
+		        }
+		        int64_t cost = edge_cost(cur, i);
+		        if (end_fixed && last_step) {
+		          cost += terminal_cost(i);
+		        }
+		        if (!found || cost < best_cost
+		            || (cost == best_cost && names[i] < names[best])) {
+		          best = i;
+		          best_cost = cost;
+		          found = true;
+	        }
+	      }
+	      if (!found) {
         no_next_scan_cell();
       }
       used[best] = true;
       cur = best;
       order.push_back(cur);
     }
-    return order;
-  };
+	    return order;
+	  };
 
-  const auto farthest_insertion_order
-      = [&](std::size_t start) -> std::vector<std::size_t> {
-    std::vector<std::size_t> order;
-    order.reserve(n);
+		  const auto farthest_insertion_order
+		      = [&](std::size_t start) -> std::vector<std::size_t> {
+	    std::vector<std::size_t> order;
+	    order.reserve(n);
     std::vector<bool> in_path(n, false);
 
     order.push_back(start);
@@ -2118,14 +3590,16 @@ void OptimizeScanWirelength(
 
       // Insert it at the position that minimises the path length increase.
       std::size_t best_pos = order.size();  // append by default
-      int64_t best_delta = manhattan(scan_in_pts[order.back()], scan_in_pts[next]);
+      int64_t best_delta = edge_cost(order.back(), next);
+      if (end_fixed) {
+        best_delta += terminal_cost(next) - terminal_cost(order.back());
+      }
 
       for (std::size_t pos = 0; pos + 1 < order.size(); ++pos) {
         const auto a = order[pos];
         const auto b = order[pos + 1];
-        const int64_t delta = manhattan(scan_in_pts[a], scan_in_pts[next])
-                              + manhattan(scan_in_pts[next], scan_in_pts[b])
-                              - manhattan(scan_in_pts[a], scan_in_pts[b]);
+        const int64_t delta
+            = edge_cost(a, next) + edge_cost(next, b) - edge_cost(a, b);
         if (delta < best_delta || (delta == best_delta && pos + 1 < best_pos)) {
           best_delta = delta;
           best_pos = pos + 1;
@@ -2154,54 +3628,89 @@ void OptimizeScanWirelength(
     }
 
     return order;
-  };
+	  };
 
-  const auto two_opt_improve
-      = [&](std::vector<std::size_t>& order, int max_passes) -> void {
-    if (max_passes <= 0 || order.size() < 4) {
-      return;
-    }
+		  const auto two_opt_improve
+		      = [&](std::vector<std::size_t>& order, int max_passes) -> void {
+		    if (max_passes <= 0 || order.size() < 4) {
+		      return;
+		    }
 
-    const int64_t before = path_len(order, scan_in_pts, scan_out_pts);
-    bool improved_any = false;
+		    const int64_t before = path_cost(order);
+		    bool improved_any = false;
 
-    for (int pass = 0; pass < max_passes; ++pass) {
-      bool pass_improved = false;
-      for (std::size_t i = 0; i + 3 < order.size(); ++i) {
-        for (std::size_t j = i + 2; j + 1 < order.size(); ++j) {
-          const auto a = order[i];
-          const auto b = order[i + 1];
-          const auto c = order[j];
-          const auto d = order[j + 1];
-          const int64_t old_cost = manhattan(scan_in_pts[a], scan_in_pts[b])
-                                   + manhattan(scan_in_pts[c], scan_in_pts[d]);
-          const int64_t new_cost = manhattan(scan_in_pts[a], scan_in_pts[c])
-                                   + manhattan(scan_in_pts[b], scan_in_pts[d]);
-          if (new_cost < old_cost) {
-            std::reverse(order.begin() + static_cast<std::ptrdiff_t>(i + 1),
-                         order.begin() + static_cast<std::ptrdiff_t>(j + 1));
-            pass_improved = true;
-            improved_any = true;
-          }
-        }
-      }
-      if (!pass_improved) {
-        break;
-      }
-    }
+	    const auto two_opt_first_improve
+	        = [&](std::vector<std::size_t>& ord) -> bool {
+	      const std::size_t nn = ord.size();
+	      if (nn < 4) {
+	        return false;
+	      }
+	      // Prefix sums for forward edges and reversed-adjacent edges.
+	      std::vector<int64_t> forward_prefix(nn, 0);
+	      std::vector<int64_t> rev_prefix(nn, 0);
+	      for (std::size_t i = 1; i < nn; ++i) {
+	        forward_prefix[i]
+	            = forward_prefix[i - 1] + edge_cost(ord[i - 1], ord[i]);
+	        rev_prefix[i]
+	            = rev_prefix[i - 1] + edge_cost(ord[i], ord[i - 1]);
+	      }
 
-    if (improved_any) {
-      const int64_t after = path_len(order, scan_in_pts, scan_out_pts);
-      debugPrint(logger,
-                 utl::DFT,
-                 "scan_chain_opt",
-                 1,
-                 "OptimizeScanWirelength: 2-opt improved path length {} -> {} "
-                 "({} cells)",
-                 before,
-                 after,
-                 order.size());
-    }
+	      const auto segment_forward = [&](std::size_t from,
+	                                       std::size_t to) -> int64_t {
+	        return forward_prefix[to] - forward_prefix[from];
+	      };
+	      const auto segment_reversed = [&](std::size_t from,
+	                                        std::size_t to) -> int64_t {
+	        return rev_prefix[to] - rev_prefix[from];
+	      };
+
+	      for (std::size_t i = 0; i + 2 < nn; ++i) {
+	        for (std::size_t j = i + 2; j < nn; ++j) {
+	          const std::size_t a = ord[i];
+	          const std::size_t b = ord[i + 1];
+		          const std::size_t c = ord[j];
+		          const bool has_d = (j + 1 < nn);
+		          const std::size_t d = has_d ? ord[j + 1] : 0;
+
+	          const int64_t old_inside = segment_forward(i + 1, j);
+	          const int64_t new_inside = segment_reversed(i + 1, j);
+
+		          const int64_t old_edges
+		              = edge_cost(a, b) + (has_d ? edge_cost(c, d) : 0)
+		                + (!has_d && end_fixed ? terminal_cost(c) : 0);
+		          const int64_t new_edges
+		              = edge_cost(a, c) + (has_d ? edge_cost(b, d) : 0)
+		                + (!has_d && end_fixed ? terminal_cost(b) : 0);
+
+		          if (new_edges + new_inside < old_edges + old_inside) {
+		            std::reverse(ord.begin() + static_cast<std::ptrdiff_t>(i + 1),
+		                         ord.begin() + static_cast<std::ptrdiff_t>(j + 1));
+	            return true;
+	          }
+	        }
+	      }
+	      return false;
+	    };
+
+	    for (int pass = 0; pass < max_passes; ++pass) {
+	      if (!two_opt_first_improve(order)) {
+	        break;
+	      }
+	      improved_any = true;
+	    }
+
+		    if (improved_any) {
+		      const int64_t after = path_cost(order);
+		      debugPrint(logger,
+		                 utl::DFT,
+	                 "scan_chain_opt",
+	                 1,
+	                 "OptimizeScanWirelength: 2-opt improved path cost {} -> {} "
+	                 "({} cells)",
+	                 before,
+	                 after,
+	                 order.size());
+	    }
   };
 
   int two_opt_passes = 0;
@@ -2213,23 +3722,26 @@ void OptimizeScanWirelength(
     two_opt_passes = 1;
   }
 
-  // Quadratic heuristics for small/medium chains.
-  if (n <= kQuadraticHeuristicMaxCells) {
-    std::vector<std::size_t> best_order = greedy_nn_order(start_index);
-    two_opt_improve(best_order, two_opt_passes);
-    int64_t best_cost = path_len(best_order, scan_in_pts, scan_out_pts);
+	  // Quadratic heuristics for small/medium chains.
+	  if (n <= kQuadraticHeuristicMaxCells) {
+	    std::vector<std::size_t> best_order = greedy_nn_order(start_index);
+	    two_opt_improve(best_order, two_opt_passes);
+	    int64_t best_cost = path_cost(best_order);
 
-    if (n <= kFarthestInsertionMaxCells) {
-      std::vector<std::size_t> fi_order = farthest_insertion_order(start_index);
-      two_opt_improve(fi_order, two_opt_passes);
-      const int64_t fi_cost = path_len(fi_order, scan_in_pts, scan_out_pts);
-      if (fi_cost < best_cost) {
-        best_order = std::move(fi_order);
-      }
-    }
+	    if (n <= kFarthestInsertionMaxCells) {
+	      std::vector<std::size_t> fi_order = farthest_insertion_order(start_index);
+	      two_opt_improve(fi_order, two_opt_passes);
+	      const int64_t fi_cost = path_cost(fi_order);
+	      if (fi_cost < best_cost) {
+	        best_order = std::move(fi_order);
+	      }
+	    }
 
     std::vector<std::unique_ptr<ScanCell>> ordered;
     ordered.reserve(n);
+    if (!begin.has_value() && !end.has_value()) {
+      rotateOrderToDropWorstEdge(best_order, names, edge_cost);
+    }
     for (const std::size_t idx : best_order) {
       ordered.emplace_back(std::move(cells[idx]));
     }
@@ -2237,8 +3749,8 @@ void OptimizeScanWirelength(
     return;
   }
 
-  // Fallback for large chains: rtree greedy ordering with a Manhattan-aware
-  // choice among the nearest Euclidean candidates.
+	  // Fallback for large chains: rtree greedy ordering with a Manhattan-aware
+	  // choice among the nearest Euclidean candidates.
   // Get points in a form ready to insert into index
   using Point = bg::model::point<int, 2, bg::cs::cartesian>;
   std::vector<std::pair<Point, size_t>> transformed;
@@ -2249,7 +3761,7 @@ void OptimizeScanWirelength(
   }
   // Update the index
   bgi::rtree<std::pair<Point, size_t>, bgi::rstar<4>> rtree(transformed);
-  auto cursor = transformed[start_index];
+	  auto cursor = transformed[start_index];
 
   // Search nearest neighbours. The rtree nearest search is Euclidean, so we
   // evaluate a handful of nearest Euclidean candidates and pick the best by
@@ -2257,27 +3769,32 @@ void OptimizeScanWirelength(
   std::vector<std::unique_ptr<ScanCell>> ordered;
   ordered.reserve(cells.size());
 
-  ordered.emplace_back(std::move(cells[cursor.second]));
-  rtree.remove(cursor);
+	  ordered.emplace_back(std::move(cells[cursor.second]));
+	  rtree.remove(cursor);
 
-  while (ordered.size() < cells.size()) {
-    bool found = false;
-    std::pair<Point, size_t> best = cursor;
-    int64_t best_dist = std::numeric_limits<int64_t>::max();
-    odb::Point cursor_pt(bg::get<0>(cursor.first), bg::get<1>(cursor.first));
+		  while (ordered.size() < cells.size()) {
+		    bool found = false;
+		    std::pair<Point, size_t> best = cursor;
+		    int64_t best_dist = std::numeric_limits<int64_t>::max();
+		    const std::size_t cursor_idx = cursor.second;
+		    const odb::Point cursor_out = scan_out_pts[cursor_idx];
+		    const Point query_pt(cursor_out.x(), cursor_out.y());
+		    const bool last_step = (ordered.size() + 1 == cells.size());
 
-    for (auto it
-         = rtree.qbegin(bgi::nearest(cursor.first, kNearestCandidateCount));
-         it != rtree.qend();
-         ++it) {
-      const auto cand = *it;
-      odb::Point cand_pt(bg::get<0>(cand.first), bg::get<1>(cand.first));
-      const int64_t dist = manhattan(cursor_pt, cand_pt);
-      if (!found || dist < best_dist
-          || (dist == best_dist && cand.second < best.second)) {
-        best = cand;
-        best_dist = dist;
-        found = true;
+		    for (auto it
+		         = rtree.qbegin(bgi::nearest(query_pt, kNearestCandidateCount));
+		         it != rtree.qend();
+		         ++it) {
+		      const auto cand = *it;
+		      int64_t dist = edge_cost(cursor_idx, cand.second);
+		      if (end_fixed && last_step) {
+		        dist += terminal_cost(cand.second);
+		      }
+		      if (!found || dist < best_dist
+		          || (dist == best_dist && cand.second < best.second)) {
+		        best = cand;
+		        best_dist = dist;
+	        found = true;
       }
     }
 

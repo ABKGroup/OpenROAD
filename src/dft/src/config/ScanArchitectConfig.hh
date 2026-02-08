@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "utl/Logger.h"
@@ -20,8 +21,8 @@ class ScanArchitectConfig
   // TODO Add suport for mix_edges, mix_clocks, mix_clocks_not_edges
   enum class ClockMixing
   {
-    NoMix,    // We create different scan chains for each clock and edge
-    ClockMix  // We architect the flops of different clock and edge together
+    NoMix,    // Separate scan chains per clock (edge polarity handled within-chain)
+    ClockMix  // Mix flops of different clocks/edges together
   };
 
   // Metric used for ordering scan cells within each scan chain.
@@ -35,8 +36,7 @@ class ScanArchitectConfig
   enum class ScanOrderSolver
   {
     Heuristic,  // Greedy + local search heuristics (fast)
-    ScanOpt,    // ScanOpt-style iterated local search (higher quality)
-    MinFeedthrough  // Row-sweep DP for min-feedthrough special case
+    ScanOpt     // ScanOpt-style iterated local search (higher quality)
   };
 
   struct ScanOrderGroupConstraint
@@ -64,10 +64,26 @@ class ScanArchitectConfig
     int y = 0;
   };
 
+  // Scan-chain endpoint constraint. The point can be specified either as:
+  //   - explicit coordinates in DBU, or
+  //   - a design terminal name (top-level port or instance/pin).
+  struct ChainEndpoint
+  {
+    enum class Type
+    {
+      Point,
+      Term
+    };
+
+    Type type{Type::Point};
+    Point point;
+    std::string term;
+  };
+
   struct ChainEndpoints
   {
-    std::optional<Point> begin;
-    std::optional<Point> end;
+    std::optional<ChainEndpoint> begin;
+    std::optional<ChainEndpoint> end;
   };
 
   void setClockMixing(ClockMixing clock_mixing);
@@ -98,11 +114,39 @@ class ScanArchitectConfig
   void setScanOrderSolver(ScanOrderSolver solver);
   ScanOrderSolver getScanOrderSolver() const;
 
+  // Default scan port naming patterns. These match the scan stitch defaults and
+  // can be overridden via `set_dft_config -scan_*_name_pattern`.
+  //
+  // When no explicit chain endpoints are provided in the constraints file,
+  // Scan Architect may use these patterns to derive implicit begin/end ports
+  // for ordering cost evaluation.
+  void setScanEnableNamePattern(std::string_view pattern);
+  std::string_view getScanEnableNamePattern() const;
+  void setScanInNamePattern(std::string_view pattern);
+  std::string_view getScanInNamePattern() const;
+  void setScanOutNamePattern(std::string_view pattern);
+  std::string_view getScanOutNamePattern() const;
+
   void setScanOptRounds(uint64_t rounds);
   uint64_t getScanOptRounds() const;
 
   void setScanOptSeed(uint64_t seed);
   uint64_t getScanOptSeed() const;
+
+  // Optional ScanOpt time limit in seconds (0 = unlimited).
+  void setScanOptTimeLimitSeconds(double seconds);
+  double getScanOptTimeLimitSeconds() const;
+
+  // Optional temperature-controlled acceptance of non-improving moves (off by
+  // default). This can help escape local minima at the expense of extra
+  // randomness; use a fixed ScanOpt seed for reproducibility.
+  void setScanOptTempControl(bool enable);
+  bool getScanOptTempControl() const;
+
+  // Temperature divisor when temp control is enabled. Larger values make
+  // uphill acceptance rarer.
+  void setScanOptTDiv(double t_div);
+  double getScanOptTDiv() const;
 
   // Preferred-direction tuning: vertical movement is weighted by this factor
   // relative to horizontal movement (default 1.0).
@@ -126,6 +170,29 @@ class ScanArchitectConfig
   double getTimingWeightHold() const;
   void setTimingCriticalSlack(double slack);
   double getTimingCriticalSlack() const;
+
+  // Optional automatic exclusions.
+  // When enabled, shift-register chains are detected and excluded from
+  // scan_replace and scan planning.
+  void setAutoExcludeShiftRegisters(bool enable);
+  bool getAutoExcludeShiftRegisters() const;
+
+  // Prefer using the complemented output (Qbar/QN) for scan-out when the
+  // library does not explicitly tag a scan-out port. This can reduce added
+  // load on functional Q nets for libraries whose scan architecture reuses
+  // the functional output as scan-out.
+  void setPreferQbarScanOut(bool enable);
+  bool getPreferQbarScanOut() const;
+
+  // Minimum number of sequential elements to consider a chain a "shift
+  // register" for auto exclusion (must be >= 2).
+  void setShiftRegisterMinLength(int min_length);
+  int getShiftRegisterMinLength() const;
+
+  // Replace the current auto-excluded instance set (used by automatic
+  // exclusions such as shift-register detection).
+  void clearAutoExcludedInstances();
+  void setAutoExcludedInstances(std::unordered_set<std::string> instances);
 
   // Optional scan ordering constraints (ScanOpt-style):
   // - group constraints (members must stay together in one chain)
@@ -153,6 +220,17 @@ class ScanArchitectConfig
   std::optional<std::string_view> getAssignedChainForInstance(
       std::string_view inst_name) const;
 
+  // Optional exclusion list: instances listed here are skipped by scan_replace
+  // (left as functional flops) and ignored by scan planning.
+  bool isInstanceExcluded(std::string_view inst_name) const;
+  bool isMasterExcluded(std::string_view master_name) const;
+  bool isInstanceExcluded(std::string_view inst_name,
+                          std::string_view master_name) const;
+  const std::unordered_set<std::string>& getExcludedInstances() const;
+  const std::unordered_set<std::string>& getAutoExcludedInstances() const;
+  const std::vector<std::string>& getExcludedInstancePatterns() const;
+  const std::vector<std::string>& getExcludedMasterPatterns() const;
+
   bool loadScanOrderConstraintsFile(const std::string& path, utl::Logger* logger);
 
   // Prints using logger->report the config used by Scan Architect
@@ -172,17 +250,25 @@ class ScanArchitectConfig
   std::optional<uint64_t> max_chains_;
 
   // How we are going to mix the clocks of the scan cells
-  ClockMixing clock_mixing_;
+  ClockMixing clock_mixing_{ClockMixing::NoMix};
 
   // How we order scan cells within each chain.
   ScanOrderMetric scan_order_metric_{ScanOrderMetric::Placement};
 
   // Which solver to use for scan ordering.
-  ScanOrderSolver scan_order_solver_{ScanOrderSolver::Heuristic};
+  ScanOrderSolver scan_order_solver_{ScanOrderSolver::ScanOpt};
 
   // ScanOpt-style solver tuning knobs.
-  uint64_t scanopt_rounds_{50};
+  uint64_t scanopt_rounds_{500000};
   uint64_t scanopt_seed_{1};
+  double scanopt_time_limit_seconds_{15.0};
+  bool scanopt_temp_control_{false};
+  double scanopt_t_div_{100.0};
+
+  // Scan signal name patterns (for implicit chain endpoints).
+  std::string scan_enable_name_pattern_ = "scan_enable_{}";
+  std::string scan_in_name_pattern_ = "scan_in_{}";
+  std::string scan_out_name_pattern_ = "scan_out_{}";
 
   // Preferred wiring direction (vertical weighting).
   double vertical_weight_{1.0};
@@ -204,6 +290,21 @@ class ScanArchitectConfig
 
   // Optional instance->chain assignment constraints (resolved from file).
   std::unordered_map<std::string, std::string> instance_to_chain_name_;
+
+  // Optional exclusion list (resolved from constraints file).
+  std::unordered_set<std::string> excluded_instances_;
+  std::vector<std::string> excluded_instance_patterns_;
+  std::vector<std::string> excluded_master_patterns_;
+
+  // Auto exclusion list (computed from the design).
+  std::unordered_set<std::string> auto_excluded_instances_;
+
+  // Automatic shift register exclusion.
+  bool auto_exclude_shift_registers_{false};
+  int shift_register_min_length_{4};
+
+  // Prefer Qbar/QN as scan-out when no scan-out is tagged in Liberty.
+  bool prefer_qbar_scan_out_{false};
 
   // Length balance constraint (percent).
   double max_imbalance_percent_{30.0};

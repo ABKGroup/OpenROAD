@@ -20,8 +20,12 @@ add_executable(TestScanArchitectHeuristic TestScanArchitectHeuristic.cpp ScanCel
 target_link_libraries(TestScanArchitectHeuristic ${TEST_LIBS})
 gtest_discover_tests(TestScanArchitectHeuristic WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
+add_executable(TestScanOrderOpt TestScanOrderOpt.cpp)
+target_link_libraries(TestScanOrderOpt ${TEST_LIBS})
+gtest_discover_tests(TestScanOrderOpt WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_dependencies(build_and_test
   TestScanArchitect
   TestScanArchitectHeuristic
+  TestScanOrderOpt
 )

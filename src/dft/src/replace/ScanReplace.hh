@@ -12,6 +12,8 @@
 
 namespace dft {
 
+class ScanArchitectConfig;
+
 // A scan cell that can be use to replace a non-scan cell
 // It contains the LibertyCell that we can use to instantiate a new cell and a
 // port map to store the equivalence non-scan and scan ports.
@@ -62,7 +64,10 @@ class RollbackCandidate
 class ScanReplace
 {
  public:
-  ScanReplace(odb::dbDatabase* db, sta::dbSta* sta, utl::Logger* logger);
+  ScanReplace(odb::dbDatabase* db,
+              sta::dbSta* sta,
+              utl::Logger* logger,
+              const ScanArchitectConfig* architect_config = nullptr);
 
   // Populates the internal state with available scan cells (if there is any).
   // This method doesn't change the design
@@ -104,6 +109,7 @@ class ScanReplace
   sta::dbSta* sta_;
   utl::Logger* logger_;
   sta::dbNetwork* db_network_;
+  const ScanArchitectConfig* architect_config_{nullptr};
 };
 
 }  // namespace dft

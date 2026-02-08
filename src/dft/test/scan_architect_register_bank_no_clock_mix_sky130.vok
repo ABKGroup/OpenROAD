@@ -8,8 +8,11 @@ module top (clk1,
     outputs_64,
     scan_enable_0,
     scan_in_0,
+    scan_out_0,
     scan_in_1,
-    scan_in_2);
+    scan_out_1,
+    scan_in_2,
+    scan_out_2);
  input clk1;
  input clk2;
  input enable;
@@ -20,8 +23,11 @@ module top (clk1,
  output [63:0] outputs_64;
  input scan_enable_0;
  input scan_in_0;
+ output scan_out_0;
  input scan_in_1;
+ output scan_out_1;
  input scan_in_2;
+ output scan_out_2;
 
  wire \bank1/_000_ ;
  wire \bank1/_001_ ;
@@ -597,7 +603,7 @@ module top (clk1,
  sky130_fd_sc_hd__sdfrbp_1 \bank2/_256_  (.D(\bank2/_064_ ),
     .Q(outputs_64[11]),
     .RESET_B(\bank2/_000_ ),
-    .SCD(scan_in_1),
+    .SCD(scan_in_0),
     .SCE(scan_enable_0),
     .CLK(clk2));
  sky130_fd_sc_hd__clkinv_1 \bank2/_128_  (.A(reset),
@@ -987,7 +993,7 @@ module top (clk1,
  sky130_fd_sc_hd__sdfrbp_1 \bank2/_257_  (.D(\bank2/_065_ ),
     .Q(outputs_64[12]),
     .RESET_B(\bank2/_001_ ),
-    .SCD(scan_in_2),
+    .SCD(scan_in_1),
     .SCE(scan_enable_0),
     .CLK(clk2));
  sky130_fd_sc_hd__sdfrbp_1 \bank2/_258_  (.D(\bank2/_066_ ),
@@ -1365,7 +1371,10 @@ module top (clk1,
  sky130_fd_sc_hd__sdfrbp_1 \bank1/_128_  (.D(\bank1/_032_ ),
     .Q(outputs_32[0]),
     .RESET_B(\bank1/_000_ ),
-    .SCD(scan_in_0),
+    .SCD(scan_in_2),
     .SCE(scan_enable_0),
     .CLK(clk1));
+ assign scan_out_0 = outputs_64[9];
+ assign scan_out_1 = outputs_64[10];
+ assign scan_out_2 = outputs_32[31];
 endmodule

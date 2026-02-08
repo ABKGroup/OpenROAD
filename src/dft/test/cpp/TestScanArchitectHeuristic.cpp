@@ -119,6 +119,9 @@ TEST(TestScanArchitectHeuristic, ArchitectWithTwoClockDomainNoMix)
   ScanArchitectConfig config;
   config.setClockMixing(ScanArchitectConfig::ClockMixing::NoMix);
   config.setMaxLength(10);
+  // This test focuses on clock-domain partitioning + max_length packing.
+  // Disable default length-balancing (max_imbalance) to keep expectations stable.
+  config.setMaxImbalancePercent(1000.0);
   std::vector<std::unique_ptr<ScanCell>> scan_cells;
   std::vector<std::string> scan_cell_names;
 
@@ -176,6 +179,9 @@ TEST(TestScanArchitectHeuristic, ArchitectWithTwoEdgesNoMix)
   ScanArchitectConfig config;
   config.setClockMixing(ScanArchitectConfig::ClockMixing::NoMix);
   config.setMaxLength(10);
+  // This test focuses on edge (polarity) partitioning + max_length packing.
+  // Disable default length-balancing (max_imbalance) to keep expectations stable.
+  config.setMaxImbalancePercent(1000.0);
   std::vector<std::unique_ptr<ScanCell>> scan_cells;
   std::vector<std::string> scan_cell_names;
 

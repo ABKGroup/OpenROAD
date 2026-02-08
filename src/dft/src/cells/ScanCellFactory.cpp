@@ -110,6 +110,7 @@ std::unique_ptr<ClockDomain> FindOneBitCellClockDomain(odb::dbInst* inst,
 
 std::unique_ptr<OneBitScanCell> CreateOneBitCell(odb::dbInst* inst,
                                                  sta::dbSta* sta,
+                                                 const ScanArchitectConfig& config,
                                                  utl::Logger* logger)
 {
   sta::dbNetwork* db_network = sta->getDbNetwork();
@@ -151,9 +152,22 @@ std::unique_ptr<OneBitScanCell> CreateOneBitCell(odb::dbInst* inst,
   if (scan_out_port == nullptr) {
     // Many libraries do not explicitly tag scan-out ports; fall back to the
     // functional output.
-    scan_out_port = liberty_cell->findLibertyPort("Q");
-    if (scan_out_port == nullptr) {
+    if (config.getPreferQbarScanOut()) {
       scan_out_port = liberty_cell->findLibertyPort("QN");
+      if (scan_out_port == nullptr) {
+        scan_out_port = liberty_cell->findLibertyPort("Q_N");
+      }
+      if (scan_out_port == nullptr) {
+        scan_out_port = liberty_cell->findLibertyPort("Q");
+      }
+    } else {
+      scan_out_port = liberty_cell->findLibertyPort("Q");
+      if (scan_out_port == nullptr) {
+        scan_out_port = liberty_cell->findLibertyPort("QN");
+      }
+      if (scan_out_port == nullptr) {
+        scan_out_port = liberty_cell->findLibertyPort("Q_N");
+      }
     }
     if (scan_out_port == nullptr) {
       const sta::SequentialSeq& sequentials = liberty_cell->sequentials();
@@ -184,13 +198,14 @@ std::unique_ptr<OneBitScanCell> CreateOneBitCell(odb::dbInst* inst,
 
 std::unique_ptr<ScanCell> ScanCellFactory(odb::dbInst* inst,
                                           sta::dbSta* sta,
+                                          const ScanArchitectConfig& config,
                                           utl::Logger* logger)
 {
   TypeOfCell type_of_cell = IdentifyCell(inst, sta);
 
   switch (type_of_cell) {
     case TypeOfCell::kOneBitCell:
-      return CreateOneBitCell(inst, sta, logger);
+      return CreateOneBitCell(inst, sta, config, logger);
     default:
       return nullptr;
   }
@@ -239,6 +254,7 @@ std::optional<std::pair<float, float>> computeScanOutTimingSlacks(
 
 void CollectScanCells(odb::dbBlock* block,
                       sta::dbSta* sta,
+                      const ScanArchitectConfig& config,
                       bool compute_timing_slacks,
                       utl::Logger* logger,
                       std::vector<std::unique_ptr<ScanCell>>& scan_cells)
@@ -249,8 +265,11 @@ void CollectScanCells(odb::dbBlock* block,
       continue;
     }
     // TODO: Support doNotScan later
+    if (config.isInstanceExcluded(inst->getName(), inst->getMaster()->getName())) {
+      continue;
+    }
 
-    std::unique_ptr<ScanCell> scan_cell = ScanCellFactory(inst, sta, logger);
+    std::unique_ptr<ScanCell> scan_cell = ScanCellFactory(inst, sta, config, logger);
     if (scan_cell != nullptr) {
       if (compute_timing_slacks) {
         if (auto slacks = computeScanOutTimingSlacks(*scan_cell, sta)) {
@@ -265,6 +284,7 @@ void CollectScanCells(odb::dbBlock* block,
   for (odb::dbBlock* next_block : block->getChildren()) {
     CollectScanCells(next_block,
                      sta,
+                     config,
                      compute_timing_slacks,
                      logger,
                      scan_cells);
@@ -286,6 +306,7 @@ std::vector<std::unique_ptr<ScanCell>> CollectScanCells(odb::dbDatabase* db,
          || config.getTimingWeightHold() != 0.0);
   CollectScanCells(chip->getBlock(),
                    sta,
+                   config,
                    compute_timing_slacks,
                    logger,
                    scan_cells);

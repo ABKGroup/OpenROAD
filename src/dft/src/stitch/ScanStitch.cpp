@@ -12,6 +12,8 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -32,6 +34,69 @@ constexpr std::string_view kLockupNetPrefix = "dft_lockup_net_";
 
 constexpr std::string_view kScanBufferInstPrefix = "dft_scan_buf_";
 constexpr std::string_view kScanBufferNetPrefix = "dft_scan_buf_net_";
+
+odb::dbTechLayer* DefaultPortLayer(odb::dbBlock* block)
+{
+  if (block == nullptr) {
+    return nullptr;
+  }
+  odb::dbTech* tech = block->getTech();
+  if (tech == nullptr) {
+    return nullptr;
+  }
+  if (odb::dbTechLayer* layer = tech->findRoutingLayer(1)) {
+    return layer;
+  }
+  // Fall back to the first routing layer in case routing levels aren't set.
+  for (odb::dbTechLayer* layer : tech->getLayers()) {
+    if (layer && layer->getType() == odb::dbTechLayerType::ROUTING) {
+      return layer;
+    }
+  }
+  return nullptr;
+}
+
+void EnsureBTermHasLocation(odb::dbBlock* block,
+                            odb::dbBTerm* term,
+                            const odb::Point& loc,
+                            utl::Logger* logger)
+{
+  if (block == nullptr || term == nullptr) {
+    return;
+  }
+
+  int x = 0;
+  int y = 0;
+  if (term->getFirstPinLocation(x, y) && x == loc.x() && y == loc.y()) {
+    return;
+  }
+
+  odb::dbTechLayer* layer = DefaultPortLayer(block);
+  if (layer == nullptr) {
+    if (logger) {
+      logger->warn(utl::DFT,
+                   216,
+                   "Can't set pin location for port '{}' (no routing layer)",
+                   term->getName());
+    }
+    return;
+  }
+
+  // Override any previous pin location. This is intentional when the user
+  // specifies explicit (x,y) endpoints for exploration: the port's placement is
+  // used as the BeginPort/EndPort location.
+  std::vector<odb::dbBPin*> pins;
+  for (odb::dbBPin* pin : term->getBPins()) {
+    pins.push_back(pin);
+  }
+  for (odb::dbBPin* pin : pins) {
+    odb::dbBPin::destroy(pin);
+  }
+
+  odb::dbBPin* pin = odb::dbBPin::create(term);
+  pin->setPlacementStatus(odb::dbPlacementStatus::PLACED);
+  odb::dbBox::create(pin, layer, loc.x(), loc.y(), loc.x(), loc.y());
+}
 
 void RemoveExistingLockups(odb::dbBlock* block)
 {
@@ -418,6 +483,11 @@ void InsertLockupBetween(odb::dbDatabase* db,
 
 namespace dft {
 
+namespace {
+std::pair<std::string, std::optional<std::string>> SplitTermIdentifier(
+    std::string_view input);
+}  // namespace
+
 ScanStitch::ScanStitch(odb::dbDatabase* db,
                        utl::Logger* logger,
                        const ScanArchitectConfig& architect_config,
@@ -438,27 +508,205 @@ void ScanStitch::Stitch(
     return;
   }
 
+  // Defensive: ensure scan-in/out endpoint names are distinct across chains.
+  // A common misconfiguration is setting scan_in/out name patterns without "{}"
+  // while requesting multiple chains, which would otherwise silently create
+  // multiple chains sharing the same top-level ports.
+  if (scan_chains.size() > 1) {
+    std::unordered_set<std::string> in_names;
+    std::unordered_set<std::string> out_names;
+    in_names.reserve(scan_chains.size() * 2);
+    out_names.reserve(scan_chains.size() * 2);
+
+    for (std::size_t ordinal = 0; ordinal < scan_chains.size(); ++ordinal) {
+      const ScanChain& scan_chain = *scan_chains[ordinal];
+      const std::optional<ScanArchitectConfig::ChainEndpoints> endpoints
+          = architect_config_.getChainEndpoints(scan_chain.getName());
+
+      std::optional<std::string_view> begin_term;
+      std::optional<std::string_view> end_term;
+      if (endpoints.has_value()) {
+        if (endpoints->begin.has_value()
+            && endpoints->begin->type
+                   == ScanArchitectConfig::ChainEndpoint::Type::Term) {
+          begin_term = std::string_view(endpoints->begin->term);
+        }
+        if (endpoints->end.has_value()
+            && endpoints->end->type
+                   == ScanArchitectConfig::ChainEndpoint::Type::Term) {
+          end_term = std::string_view(endpoints->end->term);
+        }
+      }
+
+      std::string scan_in_name;
+      std::string scan_out_name;
+      try {
+        scan_in_name = begin_term.has_value()
+                           ? std::string(begin_term.value())
+                           : fmt::format(FMT_RUNTIME(config_.getInNamePattern()),
+                                         ordinal);
+        scan_out_name = end_term.has_value()
+                            ? std::string(end_term.value())
+                            : fmt::format(FMT_RUNTIME(config_.getOutNamePattern()),
+                                          ordinal);
+      } catch (...) {
+        logger_->error(
+            utl::DFT,
+            247,
+            "Failed to format scan-in/out port names for chain '{}' (ordinal {})",
+            scan_chain.getName(),
+            ordinal);
+      }
+
+      if (!in_names.insert(scan_in_name).second) {
+        logger_->error(
+            utl::DFT,
+            248,
+            "Non-unique scan-in endpoint '{}' across chains; check "
+            "-scan_in_name_pattern and/or constraints file chain begin ports",
+            scan_in_name);
+      }
+      if (!out_names.insert(scan_out_name).second) {
+        logger_->error(
+            utl::DFT,
+            249,
+            "Non-unique scan-out endpoint '{}' across chains; check "
+            "-scan_out_name_pattern and/or constraints file chain end ports",
+            scan_out_name);
+      }
+    }
+  }
+
   RemoveExistingLockups(top_block_);
   RemoveExistingScanBuffers(top_block_);
 
+  bool have_existing_scan_ports = false;
+  try {
+    const std::string in0
+        = fmt::format(FMT_RUNTIME(config_.getInNamePattern()), 0);
+    const std::string out0
+        = fmt::format(FMT_RUNTIME(config_.getOutNamePattern()), 0);
+    have_existing_scan_ports = (top_block_->findBTerm(in0.c_str()) != nullptr)
+                               || (top_block_->findBTerm(out0.c_str()) != nullptr);
+  } catch (...) {
+    // Ignore malformed patterns here; errors will be reported when formatting
+    // is attempted for a specific chain.
+  }
+
   size_t ordinal = 0;
   for (const std::unique_ptr<ScanChain>& scan_chain : scan_chains) {
-    Stitch(top_block_, *scan_chain, ordinal);
+    Stitch(top_block_, *scan_chain, ordinal, have_existing_scan_ports);
     ordinal += 1;
   }
 }
 
 void ScanStitch::Stitch(odb::dbBlock* block,
                         ScanChain& scan_chain,
-                        size_t ordinal)
+                        size_t ordinal,
+                        bool warn_on_missing_pattern_ports)
 {
+  const std::optional<ScanArchitectConfig::ChainEndpoints> endpoints
+      = architect_config_.getChainEndpoints(scan_chain.getName());
+
   auto scan_enable_name
       = fmt::format(FMT_RUNTIME(config_.getEnableNamePattern()), kEnableNumber);
   auto scan_enable_driver = FindOrCreateScanEnable(block, scan_enable_name);
 
-  auto scan_in_name
-      = fmt::format(FMT_RUNTIME(config_.getInNamePattern()), ordinal);
-  ScanDriver scan_in_driver = FindOrCreateScanIn(block, scan_in_name);
+  std::optional<odb::Point> begin_pt;
+  std::optional<odb::Point> end_pt;
+  std::optional<std::string_view> begin_term;
+  std::optional<std::string_view> end_term;
+  if (endpoints.has_value()) {
+    if (endpoints->begin.has_value()) {
+      const auto& ep = endpoints->begin.value();
+      if (ep.type == ScanArchitectConfig::ChainEndpoint::Type::Point) {
+        begin_pt = odb::Point(ep.point.x, ep.point.y);
+      } else {
+        begin_term = std::string_view(ep.term);
+      }
+    }
+    if (endpoints->end.has_value()) {
+      const auto& ep = endpoints->end.value();
+      if (ep.type == ScanArchitectConfig::ChainEndpoint::Type::Point) {
+        end_pt = odb::Point(ep.point.x, ep.point.y);
+      } else {
+        end_term = std::string_view(ep.term);
+      }
+    }
+  }
+
+  const std::string scan_in_name
+      = begin_term.has_value()
+            ? std::string(begin_term.value())
+            : fmt::format(FMT_RUNTIME(config_.getInNamePattern()), ordinal);
+  ScanDriver scan_in_driver = [&]() -> ScanDriver {
+    if (begin_term.has_value()) {
+      const auto term_info = SplitTermIdentifier(std::string_view(scan_in_name));
+      if (term_info.second.has_value()) {
+        return FindOrCreateScanIn(block, scan_in_name);
+      }
+
+      odb::dbBTerm* bterm = block->findBTerm(term_info.first.c_str());
+      if (bterm == nullptr) {
+        logger_->error(utl::DFT,
+                       224,
+                       "Scan chain '{}' begin port '{}' not found",
+                       scan_chain.getName(),
+                       term_info.first);
+      }
+      return ScanDriver(bterm);
+    }
+
+    const bool existed = (block->findBTerm(scan_in_name.c_str()) != nullptr);
+    ScanDriver driver = FindOrCreateScanIn(block, scan_in_name);
+    if (!existed && warn_on_missing_pattern_ports) {
+      logger_->warn(
+          utl::DFT,
+          225,
+          "Scan chain '{}' is missing expected scan-in port '{}' from naming "
+          "pattern; creating a new top-level port (may be unplaced)",
+          scan_chain.getName(),
+          scan_in_name);
+    }
+    return driver;
+  }();
+  if (begin_pt.has_value()) {
+    std::visit(
+        [&](auto&& term) {
+          if (term == nullptr) {
+            return;
+          }
+          using T = std::decay_t<decltype(term)>;
+          if constexpr (std::is_same_v<T, odb::dbBTerm*>) {
+            EnsureBTermHasLocation(block, term, begin_pt.value(), logger_);
+          }
+        },
+        scan_in_driver.getValue());
+  }
+  if (!begin_pt.has_value()) {
+    std::visit(
+        [&](auto&& term) {
+          if (term == nullptr) {
+            return;
+          }
+          using T = std::decay_t<decltype(term)>;
+          if constexpr (std::is_same_v<T, odb::dbBTerm*>) {
+            int x = 0;
+            int y = 0;
+            if (!term->getFirstPinLocation(x, y)) {
+              logger_->warn(
+                  utl::DFT,
+                  226,
+                  "Scan chain '{}' scan-in port '{}' has no pin location; "
+                  "begin/end cost and plots may be misleading (place pins or "
+                  "specify endpoint coordinates)",
+                  scan_chain.getName(),
+                  term->getName());
+            }
+          }
+        },
+        scan_in_driver.getValue());
+  }
 
   scan_chain.setScanIn(scan_in_driver);
   scan_chain.setScanEnable(scan_enable_driver);
@@ -510,28 +758,121 @@ void ScanStitch::Stitch(odb::dbBlock* block,
 
   // Let's connect the last cell
   const std::unique_ptr<ScanCell>& last_scan_cell = scan_cells.back();
-  auto scan_out_name
-      = fmt::format(FMT_RUNTIME(config_.getOutNamePattern()), ordinal);
-  ScanLoad scan_out_load
-      = FindOrCreateScanOut(block, last_scan_cell->getScanOut(), scan_out_name);
+  const std::string scan_out_name
+      = end_term.has_value()
+            ? std::string(end_term.value())
+            : fmt::format(FMT_RUNTIME(config_.getOutNamePattern()), ordinal);
+  ScanLoad scan_out_load = [&]() -> ScanLoad {
+    if (end_term.has_value()) {
+      const auto term_info = SplitTermIdentifier(std::string_view(scan_out_name));
+      if (term_info.second.has_value()) {
+        return FindOrCreateScanOut(
+            block, last_scan_cell->getScanOut(), scan_out_name);
+      }
+
+      odb::dbBTerm* bterm = block->findBTerm(term_info.first.c_str());
+      if (bterm == nullptr) {
+        logger_->error(utl::DFT,
+                       227,
+                       "Scan chain '{}' end port '{}' not found",
+                       scan_chain.getName(),
+                       term_info.first);
+      }
+      if (bterm->getIoType() != odb::dbIoType::OUTPUT) {
+        logger_->error(utl::DFT,
+                       228,
+                       "Top-level pin '{}' specified as {} is not an output port",
+                       term_info.first,
+                       kScanOut);
+      }
+      return ScanLoad(bterm);
+    }
+
+    const bool existed = (block->findBTerm(scan_out_name.c_str()) != nullptr);
+    ScanLoad load = FindOrCreateScanOut(
+        block, last_scan_cell->getScanOut(), scan_out_name);
+    if (!existed && warn_on_missing_pattern_ports) {
+      logger_->warn(
+          utl::DFT,
+          229,
+          "Scan chain '{}' is missing expected scan-out port '{}' from naming "
+          "pattern; creating a new top-level port (may be unplaced)",
+          scan_chain.getName(),
+          scan_out_name);
+    }
+    return load;
+  }();
+  if (end_pt.has_value()) {
+    std::visit(
+        [&](auto&& term) {
+          if (term == nullptr) {
+            return;
+          }
+          using T = std::decay_t<decltype(term)>;
+          if constexpr (std::is_same_v<T, odb::dbBTerm*>) {
+            EnsureBTermHasLocation(block, term, end_pt.value(), logger_);
+          }
+        },
+        scan_out_load.getValue());
+  }
+  if (!end_pt.has_value()) {
+    std::visit(
+        [&](auto&& term) {
+          if (term == nullptr) {
+            return;
+          }
+          using T = std::decay_t<decltype(term)>;
+          if constexpr (std::is_same_v<T, odb::dbBTerm*>) {
+            int x = 0;
+            int y = 0;
+            if (!term->getFirstPinLocation(x, y)) {
+              logger_->warn(
+                  utl::DFT,
+                  230,
+                  "Scan chain '{}' scan-out port '{}' has no pin location; "
+                  "begin/end cost and plots may be misleading (place pins or "
+                  "specify endpoint coordinates)",
+                  scan_chain.getName(),
+                  term->getName());
+            }
+          }
+        },
+        scan_out_load.getValue());
+  }
   last_scan_cell->connectScanOut(scan_out_load);
   scan_chain.setScanOut(scan_out_load);
 }
 
 namespace {
-static std::pair<std::string, std::optional<std::string>> SplitTermIdentifier(
-    const std::string& input)
+std::string UnescapeSlash(std::string_view input)
+{
+  std::string out;
+  out.reserve(input.size());
+  for (std::size_t i = 0; i < input.size(); ++i) {
+    const char c = input[i];
+    if (c == '\\' && i + 1 < input.size() && input[i + 1] == '/') {
+      continue;  // drop the escape, keep '/'
+    }
+    out.push_back(c);
+  }
+  return out;
+}
+
+std::pair<std::string, std::optional<std::string>> SplitTermIdentifier(
+    std::string_view input)
 {
   size_t tracker = 0;
   size_t slash_position;
-  while ((slash_position = input.find('/', tracker)) != std::string::npos) {
+  while ((slash_position = input.find('/', tracker)) != std::string_view::npos) {
     if (slash_position != 0 && input[slash_position - 1] == '\\') {
       tracker = slash_position + 1;
       continue;
     }
-    return {input.substr(0, slash_position), input.substr(slash_position + 1)};
+    const std::string inst = UnescapeSlash(input.substr(0, slash_position));
+    const std::string pin = UnescapeSlash(input.substr(slash_position + 1));
+    return {inst, pin};
   }
-  return {input, std::nullopt};
+  return {UnescapeSlash(input), std::nullopt};
 }
 }  // namespace
 
@@ -539,7 +880,7 @@ ScanDriver ScanStitch::FindOrCreateDriver(std::string_view kind,
                                           odb::dbBlock* block,
                                           const std::string& with_name)
 {
-  auto term_info = SplitTermIdentifier(with_name);
+  auto term_info = SplitTermIdentifier(std::string_view(with_name));
 
   if (term_info.second.has_value()) {  // Instance/ITerm
     auto inst = block->findInst(term_info.first.c_str());
@@ -596,7 +937,7 @@ ScanLoad ScanStitch::FindOrCreateScanOut(odb::dbBlock* block,
                                          const ScanDriver& cell_scan_out,
                                          const std::string& with_name)
 {
-  auto term_info = SplitTermIdentifier(with_name);
+  auto term_info = SplitTermIdentifier(std::string_view(with_name));
 
   if (term_info.second.has_value()) {  // Instance/ITerm
     auto inst = block->findInst(term_info.first.c_str());
@@ -639,18 +980,12 @@ ScanLoad ScanStitch::FindOrCreateScanOut(odb::dbBlock* block,
     return ScanLoad(bterm);
   }
 
-  // TODO: Trace forward the scan out net so we can see if it is connected to a
-  // top port or to functional logic
+  // Prefer creating a dedicated scan-out BTerm with the requested name.
+  // If the scan-out driver is already connected to a net, attach the new BTerm
+  // directly to that net to avoid creating and then orphaning a temporary net.
   odb::dbNet* scan_out_net = cell_scan_out.getNet();
   if (scan_out_net && top_block_ == scan_out_net->getBlock()) {
-    // if the scan_out_net exists, and has an BTerm that is an OUTPUT, then we
-    // can reuse that BTerm to act as scan_out, only if the block of the bterm
-    // is the top block, otherwise we will punch a new port
-    for (odb::dbBTerm* bterm : scan_out_net->getBTerms()) {
-      if (bterm->getIoType() == odb::dbIoType::OUTPUT) {
-        return ScanLoad(bterm);
-      }
-    }
+    return CreateNewPort<ScanLoad>(block, with_name, scan_out_net);
   }
 
   return CreateNewPort<ScanLoad>(block, with_name);

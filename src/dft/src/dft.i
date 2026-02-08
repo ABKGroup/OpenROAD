@@ -95,9 +95,6 @@ utl::Logger* getLogger()
     $1 = 1;
   } else if (strcasecmp(str, "SCANOPT") == 0) {
     $1 = 1;
-  } else if (strcasecmp(str, "MIN_FEEDTHROUGH") == 0
-             || strcasecmp(str, "MIN_FEEDTHROUGH_DP") == 0) {
-    $1 = 1;
   } else {
     $1 = 0;
   }
@@ -107,9 +104,6 @@ utl::Logger* getLogger()
   char *str = Tcl_GetStringFromObj($input, 0);
   if (strcasecmp(str, "SCANOPT") == 0) {
     $1 = dft::ScanArchitectConfig::ScanOrderSolver::ScanOpt;
-  } else if (strcasecmp(str, "MIN_FEEDTHROUGH") == 0
-             || strcasecmp(str, "MIN_FEEDTHROUGH_DP") == 0) {
-    $1 = dft::ScanArchitectConfig::ScanOrderSolver::MinFeedthrough;
   } else /* other values eliminated in typecheck */ {
     $1 = dft::ScanArchitectConfig::ScanOrderSolver::Heuristic;
   };
@@ -185,6 +179,28 @@ void set_dft_config_scanopt_seed(int seed)
   }
 }
 
+void set_dft_config_scanopt_time_limit(double seconds)
+{
+  if (seconds >= 0.0) {
+    getDft()->getMutableDftConfig()->getMutableScanArchitectConfig()->setScanOptTimeLimitSeconds(seconds);
+  }
+}
+
+void set_dft_config_scanopt_temp_control(int enabled)
+{
+  getDft()
+      ->getMutableDftConfig()
+      ->getMutableScanArchitectConfig()
+      ->setScanOptTempControl(enabled != 0);
+}
+
+void set_dft_config_scanopt_t_div(double t_div)
+{
+  if (t_div > 0.0) {
+    getDft()->getMutableDftConfig()->getMutableScanArchitectConfig()->setScanOptTDiv(t_div);
+  }
+}
+
 void set_dft_config_vertical_weight(double weight)
 {
   getDft()->getMutableDftConfig()->getMutableScanArchitectConfig()->setVerticalWeight(weight);
@@ -205,6 +221,30 @@ void set_dft_config_timing_critical_slack(double slack)
   getDft()->getMutableDftConfig()->getMutableScanArchitectConfig()->setTimingCriticalSlack(slack);
 }
 
+void set_dft_config_exclude_shift_registers(int enabled)
+{
+  getDft()
+      ->getMutableDftConfig()
+      ->getMutableScanArchitectConfig()
+      ->setAutoExcludeShiftRegisters(enabled != 0);
+}
+
+void set_dft_config_prefer_qbar(int enabled)
+{
+  getDft()
+      ->getMutableDftConfig()
+      ->getMutableScanArchitectConfig()
+      ->setPreferQbarScanOut(enabled != 0);
+}
+
+void set_dft_config_shift_register_min_length(int min_length)
+{
+  getDft()
+      ->getMutableDftConfig()
+      ->getMutableScanArchitectConfig()
+      ->setShiftRegisterMinLength(min_length);
+}
+
 void set_dft_config_scan_order_constraints_file(const char* path_ptr)
 {
   if (!path_ptr) {
@@ -219,14 +259,18 @@ void set_dft_config_scan_order_constraints_file(const char* path_ptr)
 
 void set_dft_config_scan_signal_name_pattern(const char* signal_ptr, const char* pattern_ptr) {
   dft::ScanStitchConfig* config = getDft()->getMutableDftConfig()->getMutableScanStitchConfig();
+  dft::ScanArchitectConfig* arch_config = getDft()->getMutableDftConfig()->getMutableScanArchitectConfig();
   std::string_view signal(signal_ptr), pattern(pattern_ptr);
   
   if (signal == "scan_in") {
     config->setInNamePattern(pattern);
+    arch_config->setScanInNamePattern(pattern);
   } else if (signal == "scan_enable") {
     config->setEnableNamePattern(pattern);
+    arch_config->setScanEnableNamePattern(pattern);
   } else if (signal == "scan_out") {
     config->setOutNamePattern(pattern);
+    arch_config->setScanOutNamePattern(pattern);
   } else {
     getLogger()->error(utl::DFT, 6, "Internal error: unrecognized signal '{}' to set a pattern for", signal); 
   }
@@ -346,6 +390,18 @@ void report_dft_config() {
 void scan_opt()
 {
   getDft()->scanOpt();
+}
+
+void write_scandef(const char* path_ptr)
+{
+  if (!path_ptr) {
+    return;
+  }
+  std::string path(path_ptr);
+  if (path.empty()) {
+    return;
+  }
+  getDft()->writeScandef(path);
 }
 
 %}  // inline

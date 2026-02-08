@@ -12,6 +12,7 @@ target_link_libraries(dft_replace_lib
     dbSta
     OpenSTA
     utl_lib
+    dft_config_lib
     dft_utils_lib
 )
 

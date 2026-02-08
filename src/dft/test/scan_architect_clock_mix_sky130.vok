@@ -24,15 +24,25 @@ module scan_architect (clock1,
     set_b,
     scan_enable_0,
     scan_in_0,
+    scan_out_0,
     scan_in_1,
+    scan_out_1,
     scan_in_2,
+    scan_out_2,
     scan_in_3,
+    scan_out_3,
     scan_in_4,
+    scan_out_4,
     scan_in_5,
+    scan_out_5,
     scan_in_6,
+    scan_out_6,
     scan_in_7,
+    scan_out_7,
     scan_in_8,
-    scan_in_9);
+    scan_out_8,
+    scan_in_9,
+    scan_out_9);
  input clock1;
  input clock2;
  output output1;
@@ -59,15 +69,25 @@ module scan_architect (clock1,
  input set_b;
  input scan_enable_0;
  input scan_in_0;
+ output scan_out_0;
  input scan_in_1;
+ output scan_out_1;
  input scan_in_2;
+ output scan_out_2;
  input scan_in_3;
+ output scan_out_3;
  input scan_in_4;
+ output scan_out_4;
  input scan_in_5;
+ output scan_out_5;
  input scan_in_6;
+ output scan_out_6;
  input scan_in_7;
+ output scan_out_7;
  input scan_in_8;
+ output scan_out_8;
  input scan_in_9;
+ output scan_out_9;
 
  wire dft_lockup_net_0_1;
  wire dft_lockup_net_1_1;
@@ -230,4 +250,14 @@ module scan_architect (clock1,
  sky130_fd_sc_hd__dlxtp_1 dft_lockup_9_1 (.D(output4),
     .Q(dft_lockup_net_9_1),
     .GATE(clock1));
+ assign scan_out_0 = output15;
+ assign scan_out_1 = output5;
+ assign scan_out_2 = output16;
+ assign scan_out_3 = output6;
+ assign scan_out_4 = output17;
+ assign scan_out_5 = output7;
+ assign scan_out_6 = output18;
+ assign scan_out_7 = output8;
+ assign scan_out_8 = output19;
+ assign scan_out_9 = output9;
 endmodule

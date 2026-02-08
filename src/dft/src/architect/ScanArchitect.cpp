@@ -536,17 +536,41 @@ void ScanArchitect::createScanChains()
 std::vector<std::unique_ptr<ScanChain>> ScanArchitect::getScanChains()
 {
   std::vector<std::unique_ptr<ScanChain>> scan_chains_flat;
-  for (auto& [hash_domain, scan_chains] : hash_domain_scan_chains_) {
+  std::size_t total = 0;
+  for (const auto& [hash_domain, scan_chains] : hash_domain_scan_chains_) {
+    (void) hash_domain;
+    total += scan_chains.size();
+  }
+  scan_chains_flat.reserve(total);
+
+  // Preserve deterministic chain numbering / user-specified name ordering by
+  // iterating hash domains in creation order (hash_domain_to_limits_ is a
+  // sorted map). This also avoids lexicographic issues like "chain_10" sorting
+  // before "chain_2" which can misalign scan_in_N/scan_out_N port ordinals.
+  for (const auto& [hash_domain, _] : hash_domain_to_limits_) {
+    (void) _;
+    auto it = hash_domain_scan_chains_.find(hash_domain);
+    if (it == hash_domain_scan_chains_.end()) {
+      continue;
+    }
+    auto& scan_chains = it->second;
     std::move(std::begin(scan_chains),
               std::end(scan_chains),
               std::back_inserter(scan_chains_flat));
+    scan_chains.clear();
   }
 
-  std::sort(scan_chains_flat.begin(),
-            scan_chains_flat.end(),
-            [](const auto& lhs, const auto& rhs) {
-              return lhs->getName() < rhs->getName();
-            });
+  // Defensive: move any remaining chains from unexpected domains.
+  for (auto& [hash_domain, scan_chains] : hash_domain_scan_chains_) {
+    (void) hash_domain;
+    if (scan_chains.empty()) {
+      continue;
+    }
+    std::move(std::begin(scan_chains),
+              std::end(scan_chains),
+              std::back_inserter(scan_chains_flat));
+    scan_chains.clear();
+  }
 
   return scan_chains_flat;
 }

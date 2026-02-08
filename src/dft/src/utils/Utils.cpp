@@ -36,14 +36,37 @@ void PopulatePortNameToNet(
 void ConnectPinsToNets(
     odb::dbInst* instance,
     const std::vector<std::tuple<std::string, odb::dbNet*>>& port_name_to_net,
-    const std::unordered_map<std::string, std::string>& port_mapping)
+    const std::unordered_map<std::string, std::string>& port_mapping,
+    utl::Logger* logger)
 {
   for (const auto& [port_name_old, net] : port_name_to_net) {
     if (net == nullptr) {
       continue;
     }
-    std::string port_name_new = port_mapping.find(port_name_old)->second;
-    instance->findITerm(port_name_new.c_str())->connect(net);
+    std::string port_name_new;
+    if (const auto it = port_mapping.find(port_name_old);
+        it != port_mapping.end()) {
+      port_name_new = it->second;
+    } else {
+      // Liberty-derived port mapping may omit power/ground pins; fall back to
+      // name-based mapping when possible (e.g. VDD/VSS).
+      port_name_new = port_name_old;
+    }
+    odb::dbITerm* iterm = instance->findITerm(port_name_new.c_str());
+    if (iterm == nullptr) {
+      if (logger) {
+        logger->error(
+            utl::DFT,
+            214,
+            "Scan replace internal error: replacement cell '{}' has no ITerm "
+            "'{}' (mapped from '{}')",
+            instance->getName(),
+            port_name_new,
+            port_name_old);
+      }
+      continue;
+    }
+    iterm->connect(net);
   }
 }
 
@@ -61,7 +84,8 @@ odb::dbInst* ReplaceCell(
     odb::dbBlock* top_block,
     odb::dbInst* old_instance,
     odb::dbMaster* new_master,
-    const std::unordered_map<std::string, std::string>& port_mapping)
+    const std::unordered_map<std::string, std::string>& port_mapping,
+    utl::Logger* logger)
 {
   std::vector<std::tuple<std::string, odb::dbNet*>> port_name_to_net;
   PopulatePortNameToNet(old_instance, port_name_to_net);
@@ -74,9 +98,10 @@ odb::dbInst* ReplaceCell(
   odb::dbGroup* group = old_instance->getGroup();
   odb::dbModule* module = old_instance->getModule();
 
+  const std::string tmp_name = "__dft_tmp_replace_" + cell_name;
   odb::dbInst* new_instance = odb::dbInst::create(top_block,
                                                   new_master,
-                                                  /*name=*/"tmp_scan_flop",
+                                                  /*name=*/tmp_name.c_str(),
                                                   /*physical_only=*/false,
                                                   module);
 
@@ -90,11 +115,42 @@ odb::dbInst* ReplaceCell(
     group->addInst(new_instance);
   }
 
+  // Validate the port mapping before destroying the old instance. Any connected
+  // pin on the old instance must map to a real pin on the replacement instance.
+  for (const auto& [port_name_old, net] : port_name_to_net) {
+    if (net == nullptr) {
+      continue;
+    }
+    std::string port_name_new;
+    if (const auto it = port_mapping.find(port_name_old);
+        it != port_mapping.end()) {
+      port_name_new = it->second;
+    } else {
+      port_name_new = port_name_old;
+    }
+    odb::dbITerm* iterm = new_instance->findITerm(port_name_new.c_str());
+    if (iterm == nullptr) {
+      if (logger) {
+        logger->warn(
+            utl::DFT,
+            215,
+            "Can't scan replace instance '{}': replacement master '{}' has no pin "
+            "'{}' (mapped from '{}')",
+            cell_name,
+            new_master->getName(),
+            port_name_new,
+            port_name_old);
+      }
+      odb::dbInst::destroy(new_instance);
+      return nullptr;
+    }
+  }
+
   // Delete the old cell
   odb::dbInst::destroy(old_instance);
 
   // Connect the new cell to the old instance's nets
-  ConnectPinsToNets(new_instance, port_name_to_net, port_mapping);
+  ConnectPinsToNets(new_instance, port_name_to_net, port_mapping, logger);
 
   // Rename as the old cell
   new_instance->rename(cell_name.c_str());

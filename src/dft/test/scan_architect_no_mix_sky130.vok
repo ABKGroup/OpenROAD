@@ -24,9 +24,13 @@ module scan_architect (clock1,
     set_b,
     scan_enable_0,
     scan_in_0,
+    scan_out_0,
     scan_in_1,
+    scan_out_1,
     scan_in_2,
-    scan_in_3);
+    scan_out_2,
+    scan_in_3,
+    scan_out_3);
  input clock1;
  input clock2;
  output output1;
@@ -53,14 +57,18 @@ module scan_architect (clock1,
  input set_b;
  input scan_enable_0;
  input scan_in_0;
+ output scan_out_0;
  input scan_in_1;
+ output scan_out_1;
  input scan_in_2;
+ output scan_out_2;
  input scan_in_3;
+ output scan_out_3;
 
 
  sky130_fd_sc_hd__sdfsbp_1 ff10_clk2_rising (.D(port1),
     .Q(output10),
-    .SCD(scan_in_2),
+    .SCD(scan_in_3),
     .SCE(scan_enable_0),
     .SET_B(set_b),
     .CLK(clock2));
@@ -72,7 +80,7 @@ module scan_architect (clock1,
     .CLK_N(clock1));
  sky130_fd_sc_hd__sdfsbp_1 ff1_clk1_rising (.D(port1),
     .Q(output1),
-    .SCD(scan_in_3),
+    .SCD(scan_in_1),
     .SCE(scan_enable_0),
     .SET_B(set_b),
     .CLK(clock1));
@@ -174,8 +182,12 @@ module scan_architect (clock1,
     .CLK(clock1));
  sky130_fd_sc_hd__sdfbbn_1 ff10_clk2_falling (.D(port1),
     .Q(output20),
-    .SCD(scan_in_1),
+    .SCD(scan_in_2),
     .SCE(scan_enable_0),
     .SET_B(set_b),
     .CLK_N(clock2));
+ assign scan_out_0 = output19;
+ assign scan_out_1 = output9;
+ assign scan_out_2 = output18;
+ assign scan_out_3 = output8;
 endmodule

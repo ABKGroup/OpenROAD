@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <string>
+
 #include "db_sta/dbSta.hh"
 #include "odb/db.h"
 #include "utl/Logger.h"
@@ -75,6 +77,10 @@ class Dft
   //  - Store the inserted DFT (scan chains) into odb for later optimization
   void executeDftPlan();
 
+  // Writes a SCANDEF/DEF-style SCANCHAINS section (for ATPG/external tools)
+  // based on the scan chains stored in the database by execute_dft_plan.
+  void writeScandef(const std::string& path) const;
+
   // Returns a mutable version of DftConfig
   DftConfig* getMutableDftConfig();
 
@@ -91,12 +97,21 @@ class Dft
   // If we need to run pre_dft to create the internal state
   bool need_to_run_pre_dft_{true};
 
+  // Cache for automatic exclusions (e.g., shift-register detection) so we don't
+  // repeatedly re-scan the netlist during a flow.
+  bool auto_exclusions_cache_valid_{false};
+  bool cached_auto_exclude_shift_registers_{false};
+  int cached_shift_register_min_length_{0};
+
   // Resets the internal state
   void reset();
 
   // Common function to perform scan replace and scan architect. Shared between
   // report_dft_plan and execute_dft_plan
   std::vector<std::unique_ptr<ScanChain>> scanArchitect();
+
+  // Applies any enabled automatic exclusions (e.g., shift-register detection).
+  void applyAutoExclusions();
 
   // Global state
   odb::dbDatabase* db_;

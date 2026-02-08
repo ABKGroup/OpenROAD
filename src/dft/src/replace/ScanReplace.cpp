@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include "ScanArchitectConfig.hh"
 #include "Utils.hh"
 #include "db_sta/dbNetwork.hh"
 #include "odb/db.h"
@@ -350,8 +351,12 @@ void ScanReplace::collectScanCellAvailable()
 
 ScanReplace::ScanReplace(odb::dbDatabase* db,
                          sta::dbSta* sta,
-                         utl::Logger* logger)
-    : db_(db), sta_(sta), logger_(logger)
+                         utl::Logger* logger,
+                         const ScanArchitectConfig* architect_config)
+    : db_(db),
+      sta_(sta),
+      logger_(logger),
+      architect_config_(architect_config)
 {
   db_network_ = sta->getDbNetwork();
 }
@@ -378,6 +383,12 @@ void ScanReplace::scanReplace(odb::dbBlock* block)
 
     if (inst->isDoNotTouch()) {
       // Do not scan replace dont_touch
+      continue;
+    }
+
+    if (architect_config_ != nullptr
+        && architect_config_->isInstanceExcluded(inst->getName(),
+                                                 inst->getMaster()->getName())) {
       continue;
     }
 
@@ -440,8 +451,14 @@ void ScanReplace::scanReplace(odb::dbBlock* block)
     sta::LibertyCell* scan_cell = scan_candidate->getScanCell();
     odb::dbMaster* master_scan_cell = db_network_->staToDb(scan_cell);
 
-    odb::dbInst* new_cell = utils::ReplaceCell(
-        block, inst, master_scan_cell, scan_candidate->getPortMapping());
+    odb::dbInst* new_cell = utils::ReplaceCell(block,
+                                               inst,
+                                               master_scan_cell,
+                                               scan_candidate->getPortMapping(),
+                                               logger_);
+    if (new_cell == nullptr) {
+      continue;
+    }
 
     already_replaced.insert(new_cell);
     addCellForRollback(master, master_scan_cell, scan_candidate);
@@ -484,10 +501,20 @@ void ScanReplace::rollbackScanReplace(odb::dbBlock* block)
     }
 
     RollbackCandidate& rollback_candidate = *found->second;
-    utils::ReplaceCell(block,
-                       inst,
-                       rollback_candidate.getMaster(),
-                       rollback_candidate.getPortMapping());
+    odb::dbInst* new_cell
+        = utils::ReplaceCell(block,
+                             inst,
+                             rollback_candidate.getMaster(),
+                             rollback_candidate.getPortMapping(),
+                             logger_);
+    if (new_cell == nullptr) {
+      logger_->warn(
+          utl::DFT,
+          218,
+          "Failed to rollback scan replacement for instance '{}' (master '{}')",
+          inst->getName(),
+          rollback_candidate.getMaster()->getName());
+    }
   }
 
   // Recursive iterate inside the block to look for inside hiers

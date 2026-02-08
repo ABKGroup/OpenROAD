@@ -12,4 +12,6 @@ Scan chain 'chain_0' has 2 cells (2 bits)
   my_shift_register/ff2
 
 
+[WARNING DFT-0226] Scan chain 'chain_0' scan-in port 'scan_in_0' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
+[WARNING DFT-0230] Scan chain 'chain_0' scan-out port 'scan_out_0' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
 No differences found.

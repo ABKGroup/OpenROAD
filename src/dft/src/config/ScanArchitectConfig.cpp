@@ -41,8 +41,8 @@ bool ParseInt(const std::string& token, int& value)
   return true;
 }
 
-bool ParsePointTokens(std::istringstream& iss,
-                      ScanArchitectConfig::Point& point)
+[[maybe_unused]] bool ParsePointTokens(std::istringstream& iss,
+                                       ScanArchitectConfig::Point& point)
 {
   std::string sx;
   std::string sy;
@@ -57,6 +57,122 @@ bool ParsePointTokens(std::istringstream& iss,
   point.x = x;
   point.y = y;
   return true;
+}
+
+bool ParseEndpointTokens(std::istringstream& iss,
+                         ScanArchitectConfig::ChainEndpoint& endpoint)
+{
+  std::string first;
+  if (!(iss >> first)) {
+    return false;
+  }
+
+  int x = 0;
+  int y = 0;
+  if (ParseInt(first, x)) {
+    std::string second;
+    if (!(iss >> second)) {
+      return false;
+    }
+    if (!ParseInt(second, y)) {
+      return false;
+    }
+    endpoint.type = ScanArchitectConfig::ChainEndpoint::Type::Point;
+    endpoint.point.x = x;
+    endpoint.point.y = y;
+    endpoint.term.clear();
+    return true;
+  }
+
+  endpoint.type = ScanArchitectConfig::ChainEndpoint::Type::Term;
+  endpoint.term = std::move(first);
+  endpoint.point = ScanArchitectConfig::Point{};
+  return true;
+}
+
+bool GlobMatch(std::string_view pattern, std::string_view text)
+{
+  // Simple glob matcher supporting:
+  // - '*' matches any substring (including empty)
+  // - '?' matches any single character
+  // - '\\' escapes the next character
+  std::size_t p = 0;
+  std::size_t t = 0;
+  std::size_t star = std::string_view::npos;
+  std::size_t match = 0;
+
+  auto next_pat = [&](std::size_t idx,
+                      char& out,
+                      bool& escaped) -> std::size_t {
+    escaped = false;
+    if (idx >= pattern.size()) {
+      out = '\0';
+      return idx;
+    }
+    if (pattern[idx] == '\\' && idx + 1 < pattern.size()) {
+      escaped = true;
+      out = pattern[idx + 1];
+      return idx + 2;
+    }
+    out = pattern[idx];
+    return idx + 1;
+  };
+
+  while (t < text.size()) {
+    char pc = '\0';
+    bool esc = false;
+    const std::size_t p_next = next_pat(p, pc, esc);
+
+    if (!esc && p < pattern.size() && pc == '*') {
+      star = p;
+      match = t;
+      p = p_next;
+      continue;
+    }
+
+    if (p < pattern.size()
+        && (( !esc && pc == '?') || (pc == text[t]))) {
+      p = p_next;
+      ++t;
+      continue;
+    }
+
+    if (star != std::string_view::npos) {
+      // Backtrack: extend the '*' match by one character.
+      char star_c = '\0';
+      bool star_esc = false;
+      (void) next_pat(star, star_c, star_esc);
+      p = star + 1;
+      t = ++match;
+      continue;
+    }
+
+    return false;
+  }
+
+  // Consume trailing '*' in pattern.
+  while (p < pattern.size()) {
+    char pc = '\0';
+    bool esc = false;
+    const std::size_t p_next = next_pat(p, pc, esc);
+    if (!esc && pc == '*') {
+      p = p_next;
+      continue;
+    }
+    break;
+  }
+
+  return p >= pattern.size();
+}
+
+bool MatchesAny(const std::vector<std::string>& patterns, std::string_view text)
+{
+  for (const std::string& pat : patterns) {
+    if (GlobMatch(pat, text)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 }  // namespace
@@ -78,6 +194,21 @@ ScanArchitectConfig::ScanOrderSolver ScanArchitectConfig::getScanOrderSolver()
   return scan_order_solver_;
 }
 
+std::string_view ScanArchitectConfig::getScanEnableNamePattern() const
+{
+  return scan_enable_name_pattern_;
+}
+
+std::string_view ScanArchitectConfig::getScanInNamePattern() const
+{
+  return scan_in_name_pattern_;
+}
+
+std::string_view ScanArchitectConfig::getScanOutNamePattern() const
+{
+  return scan_out_name_pattern_;
+}
+
 uint64_t ScanArchitectConfig::getScanOptRounds() const
 {
   return scanopt_rounds_;
@@ -86,6 +217,21 @@ uint64_t ScanArchitectConfig::getScanOptRounds() const
 uint64_t ScanArchitectConfig::getScanOptSeed() const
 {
   return scanopt_seed_;
+}
+
+double ScanArchitectConfig::getScanOptTimeLimitSeconds() const
+{
+  return scanopt_time_limit_seconds_;
+}
+
+bool ScanArchitectConfig::getScanOptTempControl() const
+{
+  return scanopt_temp_control_;
+}
+
+double ScanArchitectConfig::getScanOptTDiv() const
+{
+  return scanopt_t_div_;
 }
 
 double ScanArchitectConfig::getVerticalWeight() const
@@ -150,6 +296,21 @@ void ScanArchitectConfig::setScanOrderSolver(ScanOrderSolver solver)
   scan_order_solver_ = solver;
 }
 
+void ScanArchitectConfig::setScanEnableNamePattern(std::string_view pattern)
+{
+  scan_enable_name_pattern_ = std::string(pattern);
+}
+
+void ScanArchitectConfig::setScanInNamePattern(std::string_view pattern)
+{
+  scan_in_name_pattern_ = std::string(pattern);
+}
+
+void ScanArchitectConfig::setScanOutNamePattern(std::string_view pattern)
+{
+  scan_out_name_pattern_ = std::string(pattern);
+}
+
 void ScanArchitectConfig::setScanOptRounds(uint64_t rounds)
 {
   scanopt_rounds_ = rounds;
@@ -158,6 +319,25 @@ void ScanArchitectConfig::setScanOptRounds(uint64_t rounds)
 void ScanArchitectConfig::setScanOptSeed(uint64_t seed)
 {
   scanopt_seed_ = seed;
+}
+
+void ScanArchitectConfig::setScanOptTimeLimitSeconds(double seconds)
+{
+  if (seconds >= 0.0) {
+    scanopt_time_limit_seconds_ = seconds;
+  }
+}
+
+void ScanArchitectConfig::setScanOptTempControl(bool enable)
+{
+  scanopt_temp_control_ = enable;
+}
+
+void ScanArchitectConfig::setScanOptTDiv(double t_div)
+{
+  if (t_div > 0.0) {
+    scanopt_t_div_ = t_div;
+  }
 }
 
 void ScanArchitectConfig::setVerticalWeight(double weight)
@@ -188,6 +368,48 @@ void ScanArchitectConfig::setTimingCriticalSlack(double slack)
   }
 }
 
+void ScanArchitectConfig::setAutoExcludeShiftRegisters(bool enable)
+{
+  auto_exclude_shift_registers_ = enable;
+}
+
+bool ScanArchitectConfig::getAutoExcludeShiftRegisters() const
+{
+  return auto_exclude_shift_registers_;
+}
+
+void ScanArchitectConfig::setPreferQbarScanOut(bool enable)
+{
+  prefer_qbar_scan_out_ = enable;
+}
+
+bool ScanArchitectConfig::getPreferQbarScanOut() const
+{
+  return prefer_qbar_scan_out_;
+}
+
+void ScanArchitectConfig::setShiftRegisterMinLength(int min_length)
+{
+  // Keep this conservative; lengths < 2 do not represent a chain.
+  shift_register_min_length_ = std::max(2, min_length);
+}
+
+int ScanArchitectConfig::getShiftRegisterMinLength() const
+{
+  return shift_register_min_length_;
+}
+
+void ScanArchitectConfig::clearAutoExcludedInstances()
+{
+  auto_excluded_instances_.clear();
+}
+
+void ScanArchitectConfig::setAutoExcludedInstances(
+    std::unordered_set<std::string> instances)
+{
+  auto_excluded_instances_ = std::move(instances);
+}
+
 void ScanArchitectConfig::setChainCount(uint64_t chain_count)
 {
   chain_count_ = chain_count;
@@ -211,6 +433,9 @@ void ScanArchitectConfig::clearScanOrderConstraints()
   chain_names_.clear();
   chain_endpoints_by_name_.clear();
   instance_to_chain_name_.clear();
+  excluded_instances_.clear();
+  excluded_instance_patterns_.clear();
+  excluded_master_patterns_.clear();
 }
 
 void ScanArchitectConfig::setDefaultGroupPriority(int priority)
@@ -266,6 +491,51 @@ std::optional<std::string_view> ScanArchitectConfig::getAssignedChainForInstance
   return std::string_view(it->second);
 }
 
+bool ScanArchitectConfig::isInstanceExcluded(std::string_view inst_name) const
+{
+  if (auto_excluded_instances_.find(std::string(inst_name))
+      != auto_excluded_instances_.end()) {
+    return true;
+  }
+  if (excluded_instances_.find(std::string(inst_name)) != excluded_instances_.end()) {
+    return true;
+  }
+  return MatchesAny(excluded_instance_patterns_, inst_name);
+}
+
+bool ScanArchitectConfig::isMasterExcluded(std::string_view master_name) const
+{
+  return MatchesAny(excluded_master_patterns_, master_name);
+}
+
+bool ScanArchitectConfig::isInstanceExcluded(std::string_view inst_name,
+                                             std::string_view master_name) const
+{
+  return isInstanceExcluded(inst_name) || isMasterExcluded(master_name);
+}
+
+const std::unordered_set<std::string>& ScanArchitectConfig::getExcludedInstances() const
+{
+  return excluded_instances_;
+}
+
+const std::unordered_set<std::string>& ScanArchitectConfig::getAutoExcludedInstances() const
+{
+  return auto_excluded_instances_;
+}
+
+const std::vector<std::string>& ScanArchitectConfig::getExcludedInstancePatterns()
+    const
+{
+  return excluded_instance_patterns_;
+}
+
+const std::vector<std::string>& ScanArchitectConfig::getExcludedMasterPatterns()
+    const
+{
+  return excluded_master_patterns_;
+}
+
 bool ScanArchitectConfig::loadScanOrderConstraintsFile(
     const std::string& path,
     utl::Logger* logger)
@@ -293,6 +563,10 @@ bool ScanArchitectConfig::loadScanOrderConstraintsFile(
     std::string chain_name;
     std::vector<std::string> items;
   };
+
+  std::vector<std::string> raw_excludes;
+  std::vector<std::string> raw_exclude_instance_patterns;
+  std::vector<std::string> raw_exclude_master_patterns;
 
   std::unordered_map<std::string, RawGroup> raw_groups;
   std::vector<std::string> raw_group_order;
@@ -382,35 +656,35 @@ bool ScanArchitectConfig::loadScanOrderConstraintsFile(
             });
 
         if (k == "begin" || k == "begin_port" || k == "beginport") {
-          Point p;
-          if (!ParsePointTokens(iss, p)) {
+          ChainEndpoint ep;
+          if (!ParseEndpointTokens(iss, ep)) {
             if (logger) {
               logger->warn(utl::DFT,
                            139,
                            "Scan constraints parse error at {}:{}: expected "
-                           "'begin <x> <y>'",
+                           "'begin <x> <y>' or 'begin <port|inst/pin>'",
                            path,
                            lineno);
             }
             break;
           }
-          endpoints.begin = p;
+          endpoints.begin = std::move(ep);
           continue;
         }
         if (k == "end" || k == "end_port" || k == "endport") {
-          Point p;
-          if (!ParsePointTokens(iss, p)) {
+          ChainEndpoint ep;
+          if (!ParseEndpointTokens(iss, ep)) {
             if (logger) {
               logger->warn(utl::DFT,
                            140,
                            "Scan constraints parse error at {}:{}: expected "
-                           "'end <x> <y>'",
+                           "'end <x> <y>' or 'end <port|inst/pin>'",
                            path,
                            lineno);
             }
             break;
           }
-          endpoints.end = p;
+          endpoints.end = std::move(ep);
           continue;
         }
 
@@ -434,25 +708,27 @@ bool ScanArchitectConfig::loadScanOrderConstraintsFile(
           logger->warn(utl::DFT,
                        142,
                        "Scan constraints parse error at {}:{}: expected "
-                       "'chain_begin <name> <x> <y>'",
+                       "'chain_begin <name> <x> <y>' or 'chain_begin <name> "
+                       "<port|inst/pin>'",
                        path,
                        lineno);
         }
         continue;
       }
-      Point p;
-      if (!ParsePointTokens(iss, p)) {
+      ChainEndpoint ep;
+      if (!ParseEndpointTokens(iss, ep)) {
         if (logger) {
           logger->warn(utl::DFT,
                        143,
                        "Scan constraints parse error at {}:{}: expected "
-                       "'chain_begin <name> <x> <y>'",
+                       "'chain_begin <name> <x> <y>' or 'chain_begin <name> "
+                       "<port|inst/pin>'",
                        path,
                        lineno);
         }
         continue;
       }
-      chain_endpoints_by_name_[name].begin = p;
+      chain_endpoints_by_name_[name].begin = std::move(ep);
       continue;
     }
 
@@ -463,25 +739,27 @@ bool ScanArchitectConfig::loadScanOrderConstraintsFile(
           logger->warn(utl::DFT,
                        144,
                        "Scan constraints parse error at {}:{}: expected "
-                       "'chain_end <name> <x> <y>'",
+                       "'chain_end <name> <x> <y>' or 'chain_end <name> "
+                       "<port|inst/pin>'",
                        path,
                        lineno);
         }
         continue;
       }
-      Point p;
-      if (!ParsePointTokens(iss, p)) {
+      ChainEndpoint ep;
+      if (!ParseEndpointTokens(iss, ep)) {
         if (logger) {
           logger->warn(utl::DFT,
                        145,
                        "Scan constraints parse error at {}:{}: expected "
-                       "'chain_end <name> <x> <y>'",
+                       "'chain_end <name> <x> <y>' or 'chain_end <name> "
+                       "<port|inst/pin>'",
                        path,
                        lineno);
         }
         continue;
       }
-      chain_endpoints_by_name_[name].end = p;
+      chain_endpoints_by_name_[name].end = std::move(ep);
       continue;
     }
 
@@ -704,6 +982,68 @@ bool ScanArchitectConfig::loadScanOrderConstraintsFile(
       continue;
     }
 
+    if (keyword == "exclude" || keyword == "exclude_instance"
+        || keyword == "exclude_instances") {
+      std::vector<std::string> items;
+      std::string item;
+      while (iss >> item) {
+        items.push_back(item);
+      }
+      if (items.empty()) {
+        if (logger) {
+          logger->warn(utl::DFT,
+                       186,
+                       "Scan constraints parse error at {}:{}: exclude has no "
+                       "items",
+                       path,
+                       lineno);
+        }
+        continue;
+      }
+      for (auto& v : items) {
+        raw_excludes.push_back(std::move(v));
+      }
+      continue;
+    }
+
+    if (keyword == "exclude_instance_pattern" || keyword == "exclude_name_pattern"
+        || keyword == "exclude_name_patterns") {
+      std::string pat;
+      bool any = false;
+      while (iss >> pat) {
+        raw_exclude_instance_patterns.push_back(std::move(pat));
+        any = true;
+      }
+      if (!any && logger) {
+        logger->warn(utl::DFT,
+                     219,
+                     "Scan constraints parse error at {}:{}: {} has no patterns",
+                     path,
+                     lineno,
+                     keyword);
+      }
+      continue;
+    }
+
+    if (keyword == "exclude_master" || keyword == "exclude_master_pattern"
+        || keyword == "exclude_master_patterns") {
+      std::string pat;
+      bool any = false;
+      while (iss >> pat) {
+        raw_exclude_master_patterns.push_back(std::move(pat));
+        any = true;
+      }
+      if (!any && logger) {
+        logger->warn(utl::DFT,
+                     220,
+                     "Scan constraints parse error at {}:{}: {} has no patterns",
+                     path,
+                     lineno,
+                     keyword);
+      }
+      continue;
+    }
+
     if (logger) {
       logger->warn(utl::DFT,
                    156,
@@ -850,6 +1190,22 @@ bool ScanArchitectConfig::loadScanOrderConstraintsFile(
     }
   }
 
+  // Resolve instance exclusions (expanding groups).
+  for (const std::string& item : raw_excludes) {
+    const auto git = expanded_groups.find(item);
+    if (git != expanded_groups.end()) {
+      for (const std::string& inst : git->second) {
+        excluded_instances_.insert(inst);
+      }
+    } else {
+      excluded_instances_.insert(item);
+    }
+  }
+
+  // Record pattern-based instance/master exclusions.
+  excluded_instance_patterns_ = std::move(raw_exclude_instance_patterns);
+  excluded_master_patterns_ = std::move(raw_exclude_master_patterns);
+
   return true;
 }
 
@@ -860,6 +1216,9 @@ void ScanArchitectConfig::report(utl::Logger* logger) const
   logger->report("- Max Length: {}", utils::FormatForReport(max_length_));
   logger->report("- Max Chains: {}", utils::FormatForReport(max_chains_));
   logger->report("- Clock Mixing: {}", ClockMixingName(clock_mixing_));
+  logger->report("- Scan Enable Name Pattern: {}", scan_enable_name_pattern_);
+  logger->report("- Scan In Name Pattern: {}", scan_in_name_pattern_);
+  logger->report("- Scan Out Name Pattern: {}", scan_out_name_pattern_);
   logger->report("- Scan Order Metric: {}",
                  ScanOrderMetricName(scan_order_metric_));
   logger->report("- Scan Order Solver: {}",
@@ -874,6 +1233,11 @@ void ScanArchitectConfig::report(utl::Logger* logger) const
   if (scan_order_solver_ == ScanOrderSolver::ScanOpt) {
     logger->report("- ScanOpt Rounds: {}", scanopt_rounds_);
     logger->report("- ScanOpt Seed: {}", scanopt_seed_);
+    logger->report("- ScanOpt Temp Control: {}", scanopt_temp_control_);
+    logger->report("- ScanOpt TDiv: {:.3f}", scanopt_t_div_);
+    if (scanopt_time_limit_seconds_ > 0.0) {
+      logger->report("- ScanOpt Time Limit: {:.3f}s", scanopt_time_limit_seconds_);
+    }
   }
   if (!scan_order_groups_.empty() || !scan_order_fixed_edges_.empty()) {
     logger->report("- Scan Order Constraints:");
@@ -889,6 +1253,27 @@ void ScanArchitectConfig::report(utl::Logger* logger) const
   }
   if (!instance_to_chain_name_.empty()) {
     logger->report("- Scan Chain Assignments: {}", instance_to_chain_name_.size());
+  }
+  if (auto_exclude_shift_registers_) {
+    logger->report("- Auto Exclude Shift Registers: yes (min_length={})",
+                   shift_register_min_length_);
+  }
+  if (prefer_qbar_scan_out_) {
+    logger->report("- Prefer Qbar Scan Out: yes");
+  }
+  if (!auto_excluded_instances_.empty()) {
+    logger->report("- Auto Excluded Instances: {}", auto_excluded_instances_.size());
+  }
+  if (!excluded_instances_.empty()) {
+    logger->report("- Excluded Instances: {}", excluded_instances_.size());
+  }
+  if (!excluded_instance_patterns_.empty()) {
+    logger->report("- Excluded Instance Patterns: {}",
+                   excluded_instance_patterns_.size());
+  }
+  if (!excluded_master_patterns_.empty()) {
+    logger->report("- Excluded Master Patterns: {}",
+                   excluded_master_patterns_.size());
   }
 }
 
@@ -926,8 +1311,6 @@ std::string ScanArchitectConfig::ScanOrderSolverName(
       return "Heuristic";
     case ScanArchitectConfig::ScanOrderSolver::ScanOpt:
       return "ScanOpt";
-    case ScanArchitectConfig::ScanOrderSolver::MinFeedthrough:
-      return "Min-feedthrough (row-sweep)";
     default:
       return "Missing case in ScanOrderSolverName";
   }

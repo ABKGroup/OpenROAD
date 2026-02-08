@@ -42,6 +42,24 @@ proc execute_dft_plan { args } {
   dft::execute_dft_plan
 }
 
+sta::define_cmd_args "write_scandef" { -file file }
+proc write_scandef { args } {
+  sta::parse_key_args "write_scandef" args \
+    keys {-file} \
+    flags {}
+
+  sta::check_argc_eq0 "write_scandef" $args
+
+  if { [ord::get_db_block] == "NULL" } {
+    utl::error DFT 269 "No design block found."
+  }
+  if { ![info exists keys(-file)] } {
+    utl::error DFT 270 "Missing required -file argument."
+  }
+
+  dft::write_scandef $keys(-file)
+}
+
 sta::define_cmd_args "set_dft_config" { [-max_length max_length]
                                         [-chain_count chain_count]
                                         [-max_chains max_chains]
@@ -51,10 +69,16 @@ sta::define_cmd_args "set_dft_config" { [-max_length max_length]
                                         [-scan_order_solver scan_order_solver]
                                         [-scanopt_rounds scanopt_rounds]
                                         [-scanopt_seed scanopt_seed]
+                                        [-scanopt_time_limit scanopt_time_limit]
+                                        [-scanopt_temp_control scanopt_temp_control]
+                                        [-scanopt_t_div scanopt_t_div]
                                         [-vertical_weight vertical_weight]
                                         [-timing_setup_weight timing_setup_weight]
                                         [-timing_hold_weight timing_hold_weight]
                                         [-timing_critical_slack timing_critical_slack]
+                                        [-exclude_shift_registers exclude_shift_registers]
+                                        [-prefer_qbar prefer_qbar]
+                                        [-shift_register_min_length shift_register_min_length]
                                         [-scan_order_constraints_file scan_order_constraints_file]
                                         [-scan_enable_name_pattern scan_enable_name_pattern]
                                         [-scan_in_name_pattern scan_in_name_pattern]
@@ -82,10 +106,16 @@ proc set_dft_config { args } {
       -scan_order_solver
       -scanopt_rounds
       -scanopt_seed
+      -scanopt_time_limit
+      -scanopt_temp_control
+      -scanopt_t_div
       -vertical_weight
       -timing_setup_weight
       -timing_hold_weight
       -timing_critical_slack
+      -exclude_shift_registers
+      -prefer_qbar
+      -shift_register_min_length
       -scan_order_constraints_file
       -scan_enable_name_pattern
       -scan_in_name_pattern
@@ -161,6 +191,36 @@ proc set_dft_config { args } {
     dft::set_dft_config_scanopt_seed $seed
   }
 
+  if { [info exists keys(-scanopt_time_limit)] } {
+    set s $keys(-scanopt_time_limit)
+    if { ![string is double -strict $s] } {
+      utl::error DFT 204 "Expected a floating-point value for -scanopt_time_limit"
+    }
+    if { $s < 0.0 } {
+      utl::error DFT 205 "Expected a non-negative value for -scanopt_time_limit"
+    }
+    dft::set_dft_config_scanopt_time_limit $s
+  }
+
+  if { [info exists keys(-scanopt_temp_control)] } {
+    set v $keys(-scanopt_temp_control)
+    if { ![string is integer -strict $v] || ($v != 0 && $v != 1) } {
+      utl::error DFT 217 "Expected 0 or 1 for -scanopt_temp_control"
+    }
+    dft::set_dft_config_scanopt_temp_control $v
+  }
+
+  if { [info exists keys(-scanopt_t_div)] } {
+    set v $keys(-scanopt_t_div)
+    if { ![string is double -strict $v] } {
+      utl::error DFT 221 "Expected a floating-point value for -scanopt_t_div"
+    }
+    if { $v <= 0.0 } {
+      utl::error DFT 222 "Expected a positive value for -scanopt_t_div"
+    }
+    dft::set_dft_config_scanopt_t_div $v
+  }
+
   if { [info exists keys(-vertical_weight)] } {
     set w $keys(-vertical_weight)
     if { ![string is double -strict $w] } {
@@ -187,6 +247,31 @@ proc set_dft_config { args } {
       }
       $setter $v
     }
+  }
+
+  if { [info exists keys(-exclude_shift_registers)] } {
+    set v $keys(-exclude_shift_registers)
+    if { ![string is boolean -strict $v] } {
+      utl::error DFT 251 "-exclude_shift_registers must be a boolean (0/1/true/false)"
+    }
+    dft::set_dft_config_exclude_shift_registers [expr {$v ? 1 : 0}]
+  }
+
+  if { [info exists keys(-prefer_qbar)] } {
+    set v $keys(-prefer_qbar)
+    if { ![string is boolean -strict $v] } {
+      utl::error DFT 253 "-prefer_qbar must be a boolean (0/1/true/false)"
+    }
+    dft::set_dft_config_prefer_qbar [expr {$v ? 1 : 0}]
+  }
+
+  if { [info exists keys(-shift_register_min_length)] } {
+    set n $keys(-shift_register_min_length)
+    sta::check_positive_integer "-shift_register_min_length" $n
+    if { $n < 2 } {
+      utl::error DFT 252 "Expected -shift_register_min_length >= 2"
+    }
+    dft::set_dft_config_shift_register_min_length $n
   }
 
   if { [info exists keys(-scan_order_constraints_file)] } {

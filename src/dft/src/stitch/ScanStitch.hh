@@ -36,7 +36,10 @@ class ScanStitch
   // - Ordinals are used with scan in/out/enable name patterns to produce the
   // - final name for the signal(s) in question. Enable ordinal is different
   // - to account for whether you're using global or per-chain enable.
-  void Stitch(odb::dbBlock* block, ScanChain& scan_chain, size_t ordinal = 0);
+  void Stitch(odb::dbBlock* block,
+              ScanChain& scan_chain,
+              size_t ordinal = 0,
+              bool warn_on_missing_pattern_ports = false);
 
  private:
   ScanDriver FindOrCreateDriver(std::string_view kind,

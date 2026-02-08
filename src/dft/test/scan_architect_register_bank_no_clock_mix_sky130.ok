@@ -1,5 +1,6 @@
 [INFO ODB-0227] LEF file: sky130hd/sky130hd.tlef, created 13 layers, 25 vias
 [INFO ODB-0227] LEF file: sky130hd/sky130_fd_sc_hd_merged.lef, created 437 library cells
+[INFO DFT-0202] ScanOpt time limit 15.0s split across 3 chains => 5.0s per chain
 ***************************
 Report DFT Plan
 Number of chains: 3
@@ -7,41 +8,6 @@ Clock domain: No Mix
 ***************************
 
 Scan chain 'chain_0' has 32 cells (32 bits)
-
-  bank1/_128_ (clk1, rising)
-  bank1/_129_
-  bank1/_130_
-  bank1/_131_
-  bank1/_132_
-  bank1/_133_
-  bank1/_134_
-  bank1/_135_
-  bank1/_136_
-  bank1/_137_
-  bank1/_138_
-  bank1/_139_
-  bank1/_140_
-  bank1/_141_
-  bank1/_142_
-  bank1/_143_
-  bank1/_144_
-  bank1/_145_
-  bank1/_146_
-  bank1/_147_
-  bank1/_148_
-  bank1/_149_
-  bank1/_150_
-  bank1/_151_
-  bank1/_152_
-  bank1/_153_
-  bank1/_154_
-  bank1/_155_
-  bank1/_156_
-  bank1/_157_
-  bank1/_158_
-  bank1/_159_
-
-Scan chain 'chain_1' has 32 cells (32 bits)
 
   bank2/_256_ (clk2, rising)
   bank2/_258_
@@ -76,7 +42,7 @@ Scan chain 'chain_1' has 32 cells (32 bits)
   bank2/_316_
   bank2/_318_
 
-Scan chain 'chain_2' has 32 cells (32 bits)
+Scan chain 'chain_1' has 32 cells (32 bits)
 
   bank2/_257_ (clk2, rising)
   bank2/_259_
@@ -111,5 +77,47 @@ Scan chain 'chain_2' has 32 cells (32 bits)
   bank2/_317_
   bank2/_319_
 
+Scan chain 'chain_2' has 32 cells (32 bits)
 
+  bank1/_128_ (clk1, rising)
+  bank1/_129_
+  bank1/_130_
+  bank1/_131_
+  bank1/_132_
+  bank1/_133_
+  bank1/_134_
+  bank1/_135_
+  bank1/_136_
+  bank1/_137_
+  bank1/_138_
+  bank1/_139_
+  bank1/_140_
+  bank1/_141_
+  bank1/_142_
+  bank1/_143_
+  bank1/_144_
+  bank1/_145_
+  bank1/_146_
+  bank1/_147_
+  bank1/_148_
+  bank1/_149_
+  bank1/_150_
+  bank1/_151_
+  bank1/_152_
+  bank1/_153_
+  bank1/_154_
+  bank1/_155_
+  bank1/_156_
+  bank1/_157_
+  bank1/_158_
+  bank1/_159_
+
+
+[INFO DFT-0202] ScanOpt time limit 15.0s split across 3 chains => 5.0s per chain
+[WARNING DFT-0226] Scan chain 'chain_0' scan-in port 'scan_in_0' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
+[WARNING DFT-0230] Scan chain 'chain_0' scan-out port 'scan_out_0' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
+[WARNING DFT-0226] Scan chain 'chain_1' scan-in port 'scan_in_1' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
+[WARNING DFT-0230] Scan chain 'chain_1' scan-out port 'scan_out_1' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
+[WARNING DFT-0226] Scan chain 'chain_2' scan-in port 'scan_in_2' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
+[WARNING DFT-0230] Scan chain 'chain_2' scan-out port 'scan_out_2' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
 No differences found.

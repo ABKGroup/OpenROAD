@@ -1,5 +1,6 @@
 [INFO ODB-0227] LEF file: sky130hd/sky130hd.tlef, created 13 layers, 25 vias
 [INFO ODB-0227] LEF file: sky130hd/sky130_fd_sc_hd_merged.lef, created 437 library cells
+[INFO DFT-0202] ScanOpt time limit 15.0s split across 4 chains => 3.8s per chain
 ***************************
 Report DFT Plan
 Number of chains: 4
@@ -16,13 +17,21 @@ Scan chain 'chain_0' has 5 cells (5 bits)
 
 Scan chain 'chain_1' has 5 cells (5 bits)
 
+  ff1_clk1_rising (clock1, rising)
+  ff3_clk1_rising
+  ff5_clk1_rising
+  ff7_clk1_rising
+  ff9_clk1_rising
+
+Scan chain 'chain_2' has 5 cells (5 bits)
+
   ff10_clk2_falling (clock2, falling)
   ff2_clk2_falling
   ff4_clk2_falling
   ff6_clk2_falling
   ff8_clk2_falling
 
-Scan chain 'chain_2' has 5 cells (5 bits)
+Scan chain 'chain_3' has 5 cells (5 bits)
 
   ff10_clk2_rising (clock2, rising)
   ff2_clk2_rising
@@ -30,14 +39,15 @@ Scan chain 'chain_2' has 5 cells (5 bits)
   ff6_clk2_rising
   ff8_clk2_rising
 
-Scan chain 'chain_3' has 5 cells (5 bits)
-
-  ff1_clk1_rising (clock1, rising)
-  ff3_clk1_rising
-  ff5_clk1_rising
-  ff7_clk1_rising
-  ff9_clk1_rising
-
 
 No differences found.
+[INFO DFT-0202] ScanOpt time limit 15.0s split across 4 chains => 3.8s per chain
+[WARNING DFT-0226] Scan chain 'chain_0' scan-in port 'scan_in_0' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
+[WARNING DFT-0230] Scan chain 'chain_0' scan-out port 'scan_out_0' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
+[WARNING DFT-0226] Scan chain 'chain_1' scan-in port 'scan_in_1' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
+[WARNING DFT-0230] Scan chain 'chain_1' scan-out port 'scan_out_1' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
+[WARNING DFT-0226] Scan chain 'chain_2' scan-in port 'scan_in_2' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
+[WARNING DFT-0230] Scan chain 'chain_2' scan-out port 'scan_out_2' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
+[WARNING DFT-0226] Scan chain 'chain_3' scan-in port 'scan_in_3' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
+[WARNING DFT-0230] Scan chain 'chain_3' scan-out port 'scan_out_3' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
 No differences found.
