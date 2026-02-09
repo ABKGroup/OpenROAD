@@ -182,6 +182,11 @@ ScanArchitectConfig::ClockMixing ScanArchitectConfig::getClockMixing() const
   return clock_mixing_;
 }
 
+ScanArchitectConfig::PolarityMode ScanArchitectConfig::getPolarityMode() const
+{
+  return polarity_mode_;
+}
+
 ScanArchitectConfig::ScanOrderMetric ScanArchitectConfig::getScanOrderMetric()
     const
 {
@@ -284,6 +289,11 @@ double ScanArchitectConfig::getMaxImbalancePercent() const
 void ScanArchitectConfig::setClockMixing(ClockMixing clock_mixing)
 {
   clock_mixing_ = clock_mixing;
+}
+
+void ScanArchitectConfig::setPolarityMode(PolarityMode mode)
+{
+  polarity_mode_ = mode;
 }
 
 void ScanArchitectConfig::setScanOrderMetric(ScanOrderMetric metric)
@@ -1216,6 +1226,7 @@ void ScanArchitectConfig::report(utl::Logger* logger) const
   logger->report("- Max Length: {}", utils::FormatForReport(max_length_));
   logger->report("- Max Chains: {}", utils::FormatForReport(max_chains_));
   logger->report("- Clock Mixing: {}", ClockMixingName(clock_mixing_));
+  logger->report("- Polarity Mode: {}", PolarityModeName(polarity_mode_));
   logger->report("- Scan Enable Name Pattern: {}", scan_enable_name_pattern_);
   logger->report("- Scan In Name Pattern: {}", scan_in_name_pattern_);
   logger->report("- Scan Out Name Pattern: {}", scan_out_name_pattern_);
@@ -1287,6 +1298,19 @@ std::string ScanArchitectConfig::ClockMixingName(
       return "Clock Mix";
     default:
       return "Missing case in ClockMixingName";
+  }
+}
+
+std::string ScanArchitectConfig::PolarityModeName(
+    ScanArchitectConfig::PolarityMode mode)
+{
+  switch (mode) {
+    case ScanArchitectConfig::PolarityMode::Mid:
+      return "Mid";
+    case ScanArchitectConfig::PolarityMode::Strict:
+      return "Strict";
+    default:
+      return "Missing case in PolarityModeName";
   }
 }
 

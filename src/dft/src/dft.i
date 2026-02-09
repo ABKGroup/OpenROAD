@@ -67,6 +67,29 @@ utl::Logger* getLogger()
   };
 }
 
+// Enum: dft::ScanArchitectConfig::PolarityMode
+%typemap(typecheck) dft::ScanArchitectConfig::PolarityMode {
+  char *str = Tcl_GetStringFromObj($input, 0);
+  if (strcasecmp(str, "MID") == 0) {
+    $1 = 1;
+  } else if (strcasecmp(str, "STRICT") == 0) {
+    $1 = 1;
+  } else if (strcasecmp(str, "NO_MIX") == 0) {  // alias for strict
+    $1 = 1;
+  } else {
+    $1 = 0;
+  }
+}
+
+%typemap(in) dft::ScanArchitectConfig::PolarityMode {
+  char *str = Tcl_GetStringFromObj($input, 0);
+  if (strcasecmp(str, "STRICT") == 0 || strcasecmp(str, "NO_MIX") == 0) {
+    $1 = dft::ScanArchitectConfig::PolarityMode::Strict;
+  } else /* other values eliminated in typecheck */ {
+    $1 = dft::ScanArchitectConfig::PolarityMode::Mid;
+  };
+}
+
 // Enum: dft::ScanArchitectConfig::ScanOrderMetric
 %typemap(typecheck) dft::ScanArchitectConfig::ScanOrderMetric {
   char *str = Tcl_GetStringFromObj($input, 0);
@@ -153,6 +176,11 @@ void set_dft_config_max_imbalance(double percent)
 void set_dft_config_clock_mixing(dft::ScanArchitectConfig::ClockMixing clock_mixing)
 {
   getDft()->getMutableDftConfig()->getMutableScanArchitectConfig()->setClockMixing(clock_mixing);
+}
+
+void set_dft_config_polarity_mode(dft::ScanArchitectConfig::PolarityMode polarity_mode)
+{
+  getDft()->getMutableDftConfig()->getMutableScanArchitectConfig()->setPolarityMode(polarity_mode);
 }
 
 void set_dft_config_scan_order_metric(dft::ScanArchitectConfig::ScanOrderMetric metric)

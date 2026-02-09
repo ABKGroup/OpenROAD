@@ -68,7 +68,8 @@ The command `set_dft_config` sets the DFT configuration variables.
 | `-chain_count` | Exact total number of scan chains across the design. This takes priority over `max_chains`/`max_length` chain-count inference. In `no_mix`, this total will be distributed across clock domains as needed (at least one chain per clock). |
 | `-max_chains` | Maximum total number of scan chains across the design. In `no_mix`, this must be at least the number of clock domains. |
 | `-max_imbalance` | Maximum allowed chain length imbalance (percent). Constraint: `max(bits)/min(bits) <= 1 + max_imbalance/100`. Default is `30`. |
-| `-clock_mixing` | How scan cells are partitioned into chains by clock. `no_mix` (default) does not mix different clock domains in a chain. `clock_mix` mixes clock domains (requires lockup insertion between domains). Falling-edge cells are stitched before rising-edge cells within each chain (“mid” polarity handling). |
+| `-clock_mixing` | How scan cells are partitioned into chains by clock. `no_mix` (default) does not mix different clock domains in a chain. `clock_mix` mixes clock domains (requires lockup insertion between domains). |
+| `-polarity_mode` | How scan cells of different edge polarity are handled within a chain. `mid` (default) allows mixed polarity, stitching falling-edge cells before rising-edge cells in each chain. `strict` forbids mixing polarities within a chain, requiring separate chains when both polarities are present. |
 | `-scan_order_metric` | Metric for ordering scan cells within each chain. `PLACEMENT` uses scan-pin Manhattan distance. `PIN_TO_NET` uses pin-to-net distance to global-route guides (or detailed routes when present), falling back to placement distance. |
 | `-scan_order_solver` | Scan ordering solver. `HEURISTIC` is greedy + local cleanup. `SCANOPT` is an iterated local search (default). |
 | `-scanopt_rounds` | Iteration budget for `-scan_order_solver SCANOPT` (default `500000`). |

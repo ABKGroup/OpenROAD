@@ -18,11 +18,18 @@ namespace dft {
 class ScanArchitectConfig
 {
  public:
-  // TODO Add suport for mix_edges, mix_clocks, mix_clocks_not_edges
+  // TODO: support additional clock/edge mixing modes.
   enum class ClockMixing
   {
-    NoMix,    // Separate scan chains per clock (edge polarity handled within-chain)
-    ClockMix  // Mix flops of different clocks/edges together
+    NoMix,    // Separate scan chains per clock.
+    ClockMix  // Mix flops of different clocks together.
+  };
+
+  // How scan cells of different edge polarity are handled within chains.
+  enum class PolarityMode
+  {
+    Mid,     // Falling-edge cells are stitched before rising-edge cells per chain.
+    Strict   // Do not mix falling-edge and rising-edge cells in the same chain.
   };
 
   // Metric used for ordering scan cells within each scan chain.
@@ -87,6 +94,7 @@ class ScanArchitectConfig
   };
 
   void setClockMixing(ClockMixing clock_mixing);
+  void setPolarityMode(PolarityMode mode);
 
   // The exact number of scan chains to generate (total across the design).
   // When set, this takes priority over max_length/max_chains inference.
@@ -107,6 +115,7 @@ class ScanArchitectConfig
   double getMaxImbalancePercent() const;
 
   ClockMixing getClockMixing() const;
+  PolarityMode getPolarityMode() const;
 
   void setScanOrderMetric(ScanOrderMetric metric);
   ScanOrderMetric getScanOrderMetric() const;
@@ -237,6 +246,7 @@ class ScanArchitectConfig
   void report(utl::Logger* logger) const;
 
   static std::string ClockMixingName(ClockMixing clock_mixing);
+  static std::string PolarityModeName(PolarityMode mode);
   static std::string ScanOrderMetricName(ScanOrderMetric metric);
   static std::string ScanOrderSolverName(ScanOrderSolver solver);
 
@@ -251,6 +261,7 @@ class ScanArchitectConfig
 
   // How we are going to mix the clocks of the scan cells
   ClockMixing clock_mixing_{ClockMixing::NoMix};
+  PolarityMode polarity_mode_{PolarityMode::Mid};
 
   // How we order scan cells within each chain.
   ScanOrderMetric scan_order_metric_{ScanOrderMetric::Placement};

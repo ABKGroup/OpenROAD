@@ -65,6 +65,7 @@ sta::define_cmd_args "set_dft_config" { [-max_length max_length]
                                         [-max_chains max_chains]
                                         [-max_imbalance max_imbalance]
                                         [-clock_mixing clock_mixing]
+                                        [-polarity_mode polarity_mode]
                                         [-scan_order_metric scan_order_metric]
                                         [-scan_order_solver scan_order_solver]
                                         [-scanopt_rounds scanopt_rounds]
@@ -102,6 +103,7 @@ proc set_dft_config { args } {
       -max_chains
       -max_imbalance
       -clock_mixing
+      -polarity_mode
       -scan_order_metric
       -scan_order_solver
       -scanopt_rounds
@@ -167,6 +169,11 @@ proc set_dft_config { args } {
   if { [info exists keys(-clock_mixing)] } {
     set clock_mixing $keys(-clock_mixing)
     dft::set_dft_config_clock_mixing $clock_mixing
+  }
+
+  if { [info exists keys(-polarity_mode)] } {
+    set polarity_mode $keys(-polarity_mode)
+    dft::set_dft_config_polarity_mode $polarity_mode
   }
 
   if { [info exists keys(-scan_order_metric)] } {
