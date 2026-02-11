@@ -118,6 +118,8 @@ utl::Logger* getLogger()
     $1 = 1;
   } else if (strcasecmp(str, "SCANOPT") == 0) {
     $1 = 1;
+  } else if (strcasecmp(str, "UCLA_SCANOPT") == 0) {
+    $1 = 1;
   } else {
     $1 = 0;
   }
@@ -127,6 +129,8 @@ utl::Logger* getLogger()
   char *str = Tcl_GetStringFromObj($input, 0);
   if (strcasecmp(str, "SCANOPT") == 0) {
     $1 = dft::ScanArchitectConfig::ScanOrderSolver::ScanOpt;
+  } else if (strcasecmp(str, "UCLA_SCANOPT") == 0) {
+    $1 = dft::ScanArchitectConfig::ScanOrderSolver::UclaScanOpt;
   } else /* other values eliminated in typecheck */ {
     $1 = dft::ScanArchitectConfig::ScanOrderSolver::Heuristic;
   };

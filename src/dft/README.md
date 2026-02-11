@@ -71,7 +71,7 @@ The command `set_dft_config` sets the DFT configuration variables.
 | `-clock_mixing` | How scan cells are partitioned into chains by clock. `no_mix` (default) does not mix different clock domains in a chain. `clock_mix` mixes clock domains (requires lockup insertion between domains). |
 | `-polarity_mode` | How scan cells of different edge polarity are handled within a chain. `mid` (default) allows mixed polarity, stitching falling-edge cells before rising-edge cells in each chain. `strict` forbids mixing polarities within a chain, requiring separate chains when both polarities are present. |
 | `-scan_order_metric` | Metric for ordering scan cells within each chain. `PLACEMENT` uses scan-pin Manhattan distance. `PIN_TO_NET` uses pin-to-net distance to global-route guides (or detailed routes when present), falling back to placement distance. |
-| `-scan_order_solver` | Scan ordering solver. `HEURISTIC` is greedy + local cleanup. `SCANOPT` is an iterated local search (default). |
+| `-scan_order_solver` | Scan ordering solver. `HEURISTIC` is greedy + local cleanup. `SCANOPT` is an iterated local search (default). `UCLA_SCANOPT` uses the UCLA ScanOptpack-010411 reference implementation (fixed begin/end only; placement metric). |
 | `-scanopt_rounds` | Iteration budget for `-scan_order_solver SCANOPT` (default `500000`). |
 | `-scanopt_seed` | Random seed for `-scan_order_solver SCANOPT` (default `1`). |
 | `-scanopt_time_limit` | Total time budget (seconds) for `SCANOPT` ordering across all scan chains. OpenROAD splits the budget across chains to keep runtime bounded as chain count increases. `0` means unlimited. |

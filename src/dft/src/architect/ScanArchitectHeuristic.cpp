@@ -177,24 +177,16 @@ std::optional<odb::Point> ResolveEndpointTerm(odb::dbBlock* block,
     if (iterm == nullptr) {
       return std::nullopt;
     }
-    int x = 0;
-    int y = 0;
-    if (iterm->getAvgXY(&x, &y)) {
-      return odb::Point(x, y);
-    }
-    return inst->getLocation();
+    const odb::Rect bbox = iterm->getBBox();
+    return odb::Point(bbox.xMin(), bbox.yMin());
   }
 
   odb::dbBTerm* bterm = block->findBTerm(term_info.first.c_str());
   if (bterm == nullptr) {
     return std::nullopt;
   }
-  int x = 0;
-  int y = 0;
-  if (bterm->getFirstPinLocation(x, y)) {
-    return odb::Point(x, y);
-  }
-  return std::nullopt;
+  const odb::Rect bbox = bterm->getBBox();
+  return odb::Point(bbox.xMin(), bbox.yMin());
 }
 
 struct ChainEndpointPoints

@@ -1335,6 +1335,8 @@ std::string ScanArchitectConfig::ScanOrderSolverName(
       return "Heuristic";
     case ScanArchitectConfig::ScanOrderSolver::ScanOpt:
       return "ScanOpt";
+    case ScanArchitectConfig::ScanOrderSolver::UclaScanOpt:
+      return "UCLA ScanOpt";
     default:
       return "Missing case in ScanOrderSolverName";
   }

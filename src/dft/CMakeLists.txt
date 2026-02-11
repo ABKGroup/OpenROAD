@@ -78,7 +78,11 @@ add_subdirectory(src/clock_domain)
 add_subdirectory(src/config)
 add_subdirectory(src/replace)
 add_subdirectory(src/stitch)
+add_subdirectory(src/ucla_scanopt)
 add_subdirectory(src/utils)
+
+# UCLA ScanOpt (third-party) integration is consumed by the architect library.
+target_link_libraries(dft_architect_lib PRIVATE dft_ucla_scanopt_lib)
 if(ENABLE_TESTS)
   add_subdirectory(test)
 endif()

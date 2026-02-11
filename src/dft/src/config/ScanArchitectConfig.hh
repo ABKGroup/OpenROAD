@@ -43,7 +43,8 @@ class ScanArchitectConfig
   enum class ScanOrderSolver
   {
     Heuristic,  // Greedy + local search heuristics (fast)
-    ScanOpt     // ScanOpt-style iterated local search (higher quality)
+    ScanOpt,    // ScanOpt-style iterated local search (higher quality)
+    UclaScanOpt // UCLA ScanOptpack-010411 (reference implementation)
   };
 
   struct ScanOrderGroupConstraint

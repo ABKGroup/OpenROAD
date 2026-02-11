@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "ScanCell.hh"
+#include "UclaScanOpt.hh"
 #include "boost/geometry/core/access.hpp"
 #include "boost/geometry/core/cs.hpp"
 #include "boost/geometry/geometries/point.hpp"
@@ -312,24 +313,15 @@ odb::Point scanPinLocation(const ScanPin& pin, const odb::Point& fallback)
                    if (iterm == nullptr) {
                      return fallback;
                    }
-                   int x = 0;
-                   int y = 0;
-                   if (iterm->getAvgXY(&x, &y)) {
-                     return odb::Point(x, y);
-                   }
-                   odb::dbInst* inst = iterm->getInst();
-                   return inst ? inst->getLocation() : fallback;
+                   const odb::Rect bbox = iterm->getBBox();
+                   return odb::Point(bbox.xMin(), bbox.yMin());
                  },
                  [&](odb::dbBTerm* bterm) -> odb::Point {
                    if (bterm == nullptr) {
                      return fallback;
                    }
-                   int x = 0;
-                   int y = 0;
-                   if (bterm->getFirstPinLocation(x, y)) {
-                     return odb::Point(x, y);
-                   }
-                   return fallback;
+                   const odb::Rect bbox = bterm->getBBox();
+                   return odb::Point(bbox.xMin(), bbox.yMin());
                  }},
       pin.getValue());
 }
@@ -431,12 +423,8 @@ std::optional<odb::Point> ResolveEndpointTerm(odb::dbBlock* block,
       }
       return std::nullopt;
     }
-    int x = 0;
-    int y = 0;
-    if (iterm->getAvgXY(&x, &y)) {
-      return odb::Point(x, y);
-    }
-    return inst->getLocation();
+    const odb::Rect bbox = iterm->getBBox();
+    return odb::Point(bbox.xMin(), bbox.yMin());
   }
 
   odb::dbBTerm* bterm = block->findBTerm(term_info.first.c_str());
@@ -450,19 +438,8 @@ std::optional<odb::Point> ResolveEndpointTerm(odb::dbBlock* block,
     }
     return std::nullopt;
   }
-  int x = 0;
-  int y = 0;
-  if (bterm->getFirstPinLocation(x, y)) {
-    return odb::Point(x, y);
-  }
-  if (logger) {
-    logger->warn(utl::DFT,
-                 213,
-                 "Scan constraints: endpoint port '{}' has no pin location; "
-                 "ignoring endpoint.",
-                 term_info.first);
-  }
-  return std::nullopt;
+  const odb::Rect bbox = bterm->getBBox();
+  return odb::Point(bbox.xMin(), bbox.yMin());
 }
 
 std::optional<odb::Point> EndpointPoint(
@@ -511,20 +488,12 @@ NetAccessGeometry buildNetAccessGeometry(odb::dbNet* net)
 
   if (geom.boxes.empty()) {
     for (odb::dbITerm* iterm : net->getITerms()) {
-      int x = 0;
-      int y = 0;
-      if (iterm->getAvgXY(&x, &y)) {
-        geom.terminals.emplace_back(x, y);
-      } else if (odb::dbInst* inst = iterm->getInst()) {
-        geom.terminals.emplace_back(inst->getLocation());
-      }
+      const odb::Rect bbox = iterm->getBBox();
+      geom.terminals.emplace_back(bbox.xMin(), bbox.yMin());
     }
     for (odb::dbBTerm* bterm : net->getBTerms()) {
-      int x = 0;
-      int y = 0;
-      if (bterm->getFirstPinLocation(x, y)) {
-        geom.terminals.emplace_back(x, y);
-      }
+      const odb::Rect bbox = bterm->getBBox();
+      geom.terminals.emplace_back(bbox.xMin(), bbox.yMin());
     }
   }
 
@@ -3073,6 +3042,11 @@ void OptimizeScanWirelength(
     utl::Logger* logger,
     const std::optional<ScanArchitectConfig::ChainEndpoints>& endpoints)
 {
+  // If UCLA ScanOpt is selected but we can't use it for the chosen metric,
+  // map it to the in-tree ScanOpt solver.
+  std::optional<ScanArchitectConfig> cfg_override;
+  const ScanArchitectConfig* cfg = &config;
+
   // Nothing to order
   if (cells.empty()) {
     return;
@@ -3086,11 +3060,30 @@ void OptimizeScanWirelength(
 
   if (config.getScanOrderMetric()
       == ScanArchitectConfig::ScanOrderMetric::PinToNet) {
-    OptimizeScanWirelengthPinToNet(cells, config, logger, endpoints);
+    if (config.getScanOrderSolver()
+        == ScanArchitectConfig::ScanOrderSolver::UclaScanOpt) {
+      cfg_override = config;
+      cfg_override->setScanOrderSolver(
+          ScanArchitectConfig::ScanOrderSolver::ScanOpt);
+      cfg = &cfg_override.value();
+      logger->warn(
+          utl::DFT,
+          223,
+          "UCLA_SCANOPT is only supported for placement metric; falling back "
+          "to SCANOPT for PIN_TO_NET.");
+    }
+    OptimizeScanWirelengthPinToNet(cells, *cfg, logger, endpoints);
     return;
   }
 
-  const double vertical_weight = config.getVerticalWeight();
+  if (config.getScanOrderSolver()
+      == ScanArchitectConfig::ScanOrderSolver::UclaScanOpt) {
+    cfg_override = config;
+    cfg_override->setScanOrderSolver(ScanArchitectConfig::ScanOrderSolver::ScanOpt);
+    cfg = &cfg_override.value();
+  }
+
+  const double vertical_weight = cfg->getVerticalWeight();
   const auto manhattan = [&](const odb::Point& a, const odb::Point& b) -> int64_t {
     return manhattanDist(a, b, vertical_weight);
   };
@@ -3116,7 +3109,7 @@ void OptimizeScanWirelength(
     scan_out_pts.emplace_back(
         scanPinLocation(cell->getScanOut(), origins.back()));
     names.emplace_back(cell->getName());
-    timing_mul.emplace_back(timingMultiplierForCell(config, *cell));
+    timing_mul.emplace_back(timingMultiplierForCell(*cfg, *cell));
   }
   const int64_t local_scale
       = estimateLocalManhattanScale(scan_in_pts, vertical_weight);
@@ -3149,10 +3142,76 @@ void OptimizeScanWirelength(
     return scaleEdgeCost(man + jump_pen, timing_mul[src]);
   };
 
-  if (hasScanOrderConstraints(config)) {
+  // UCLA ScanOpt only supports unconstrained placement ordering with fixed
+  // begin/end points.
+  if (config.getScanOrderSolver()
+      == ScanArchitectConfig::ScanOrderSolver::UclaScanOpt) {
+    if (hasScanOrderConstraints(config)) {
+      logger->warn(
+          utl::DFT,
+          187,
+          "UCLA_SCANOPT does not support scan order constraints; falling back "
+          "to SCANOPT.");
+    } else if (begin.has_value() && end.has_value()) {
+      UclaScanOptParams p;
+      p.seed = cfg->getScanOptSeed();
+      // Map OpenROAD ScanOpt rounds (default 500k) to UCLA majorLoops (default 100).
+      p.major_loops = std::max<uint64_t>(1, cfg->getScanOptRounds() / 5000);
+      p.n_descents = 5;
+      p.kick_move = 15;
+      p.n_near = 20;
+      p.only_2opt = false;
+      p.temp_control = cfg->getScanOptTempControl();
+      p.zero_temp = !cfg->getScanOptTempControl();
+
+      std::vector<std::pair<int, int>> in_pts;
+      std::vector<std::pair<int, int>> out_pts;
+      in_pts.reserve(n);
+      out_pts.reserve(n);
+      for (std::size_t i = 0; i < n; ++i) {
+        in_pts.emplace_back(scan_in_pts[i].x(), scan_in_pts[i].y());
+        out_pts.emplace_back(scan_out_pts[i].x(), scan_out_pts[i].y());
+      }
+
+      std::vector<std::size_t> order;
+      try {
+        order = UclaScanOptOrder(
+            names,
+            in_pts,
+            out_pts,
+            std::make_pair(begin->x(), begin->y()),
+            std::make_pair(end->x(), end->y()),
+            p);
+      } catch (const std::exception& e) {
+        logger->warn(utl::DFT,
+                     188,
+                     "UCLA_SCANOPT failed ({}); falling back to SCANOPT.",
+                     e.what());
+        order.clear();
+      }
+
+      if (order.size() == n) {
+        std::vector<std::unique_ptr<ScanCell>> ordered;
+        ordered.reserve(n);
+        for (const std::size_t i : order) {
+          ordered.emplace_back(std::move(cells[i]));
+        }
+        cells.swap(ordered);
+        return;
+      }
+    } else {
+      logger->warn(
+          utl::DFT,
+          189,
+          "UCLA_SCANOPT requires fixed begin/end points; falling back to "
+          "SCANOPT.");
+    }
+  }
+
+  if (hasScanOrderConstraints(*cfg)) {
     optimizeScanWirelengthWithConstraints(
         cells,
-        config,
+        *cfg,
         origins,
         scan_in_pts,
         scan_out_pts,
