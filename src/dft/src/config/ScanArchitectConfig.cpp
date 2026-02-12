@@ -1319,7 +1319,7 @@ std::string ScanArchitectConfig::ScanOrderMetricName(
 {
   switch (metric) {
     case ScanArchitectConfig::ScanOrderMetric::Placement:
-      return "Placement (cell-to-cell)";
+      return "Placement (pin-to-pin)";
     case ScanArchitectConfig::ScanOrderMetric::PinToNet:
       return "Pin-to-net (routing-aware)";
     default:

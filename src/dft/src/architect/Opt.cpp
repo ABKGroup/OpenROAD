@@ -2110,7 +2110,7 @@ void optimizeScanWirelengthWithConstraints(
     std::size_t seg_start = 0;
     int64_t best_key = std::numeric_limits<int64_t>::max();
     for (std::size_t si = 0; si < sn; ++si) {
-      const odb::Point& p = origins[seg_entry[si]];
+      const odb::Point& p = scan_in_pts[seg_entry[si]];
       const int64_t key = static_cast<int64_t>(p.x()) + static_cast<int64_t>(p.y());
       if (key < best_key
           || (key == best_key && seg_names[si] < seg_names[seg_start])) {
@@ -2234,7 +2234,7 @@ void optimizeScanWirelengthWithConstraints(
                                scan_in_pts[components[ci].entry],
                                vertical_weight);
         } else {
-          const odb::Point& p = origins[components[ci].entry];
+          const odb::Point& p = scan_in_pts[components[ci].entry];
           cost = static_cast<int64_t>(p.x()) + static_cast<int64_t>(p.y());
         }
 
@@ -2326,7 +2326,7 @@ void optimizeScanWirelengthWithConstraints(
                                 scan_in_pts[c.entry],
                                 vertical_weight);
           } else {
-            const odb::Point& p = origins[c.entry];
+            const odb::Point& p = scan_in_pts[c.entry];
             key = static_cast<int64_t>(p.x()) + static_cast<int64_t>(p.y());
           }
           if (key < best_key
@@ -2460,7 +2460,7 @@ void OptimizeScanWirelengthPinToNet(std::vector<std::unique_ptr<ScanCell>>& cell
     }
   } else {
     for (std::size_t i = 0; i < n; ++i) {
-      const odb::Point& p = origins[i];
+      const odb::Point& p = scan_in_pts[i];
       const int64_t score
           = static_cast<int64_t>(p.x()) + static_cast<int64_t>(p.y());
       if (score < lowest
