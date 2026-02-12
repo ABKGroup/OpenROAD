@@ -262,7 +262,7 @@ class ScanArchitectConfig
 
   // How we are going to mix the clocks of the scan cells
   ClockMixing clock_mixing_{ClockMixing::NoMix};
-  PolarityMode polarity_mode_{PolarityMode::Mid};
+  PolarityMode polarity_mode_{PolarityMode::Strict};
 
   // How we order scan cells within each chain.
   ScanOrderMetric scan_order_metric_{ScanOrderMetric::Placement};

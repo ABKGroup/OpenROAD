@@ -3,6 +3,7 @@
 
 #include "dft/Dft.hh"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -585,6 +586,248 @@ void Dft::executeDftPlan()
                  sc_out_load.value().getValue());
     }
   }
+}
+
+int Dft::bufferScanEnable(const std::string& buffer_cell,
+                          int max_fanout,
+                          int max_levels)
+{
+  if (buffer_cell.empty()) {
+    logger_->warn(utl::DFT,
+                  280,
+                  "Scan enable buffering skipped: buffer cell not specified.");
+    return 0;
+  }
+
+  if (max_fanout <= 0) {
+    logger_->error(
+        utl::DFT, 281, "Expected max_fanout > 0 (got {}).", max_fanout);
+  }
+  if (max_levels <= 0) {
+    logger_->error(
+        utl::DFT, 282, "Expected max_levels > 0 (got {}).", max_levels);
+  }
+
+  if (db_ == nullptr) {
+    logger_->error(utl::DFT, 283, "No database available.");
+  }
+  odb::dbChip* chip = db_->getChip();
+  if (chip == nullptr || chip->getBlock() == nullptr) {
+    logger_->error(utl::DFT, 284, "No design block found.");
+  }
+  odb::dbBlock* block = chip->getBlock();
+
+  odb::dbNet* scan_enable_net = nullptr;
+  odb::dbDft* db_dft = block->getDft();
+  if (db_dft != nullptr) {
+    for (odb::dbScanChain* chain : db_dft->getScanChains()) {
+      if (chain == nullptr) {
+        continue;
+      }
+      odb::dbNet* net = std::visit(
+          [&](auto&& term) { return term ? term->getNet() : nullptr; },
+          chain->getScanEnable());
+      if (net != nullptr) {
+        scan_enable_net = net;
+        break;
+      }
+    }
+  }
+
+  if (scan_enable_net == nullptr) {
+    logger_->warn(utl::DFT,
+                  285,
+                  "Scan enable buffering skipped: scan enable net not found "
+                  "(run execute_dft_plan first).");
+    return 0;
+  }
+
+  scan_enable_net->setSigType(odb::dbSigType::SCAN);
+
+  odb::dbMaster* master = db_->findMaster(buffer_cell.c_str());
+  if (master == nullptr) {
+    logger_->error(utl::DFT,
+                   286,
+                   "Scan enable buffer cell master '{}' not found in the database.",
+                   buffer_cell);
+  }
+
+  std::string in_pin;
+  std::string out_pin;
+  for (odb::dbMTerm* mterm : master->getMTerms()) {
+    if (mterm == nullptr || mterm->getSigType() != odb::dbSigType::SIGNAL) {
+      continue;
+    }
+    const odb::dbIoType io = mterm->getIoType();
+    if (in_pin.empty() && io == odb::dbIoType::INPUT) {
+      in_pin = mterm->getName();
+    } else if (out_pin.empty() && io == odb::dbIoType::OUTPUT) {
+      out_pin = mterm->getName();
+    }
+  }
+  if (in_pin.empty() || out_pin.empty()) {
+    logger_->error(
+        utl::DFT,
+        287,
+        "Scan enable buffer cell '{}' must have at least one SIGNAL INPUT and "
+        "one SIGNAL OUTPUT pin.",
+        buffer_cell);
+  }
+
+  struct LoadLoc
+  {
+    odb::dbITerm* iterm = nullptr;
+    int x = 0;
+    int y = 0;
+    std::string name;
+  };
+
+  int total_inserted = 0;
+
+  for (int level = 0; level < max_levels; ++level) {
+    std::vector<LoadLoc> loads;
+    for (odb::dbITerm* iterm : scan_enable_net->getITerms()) {
+      if (iterm == nullptr || iterm->getIoType() != odb::dbIoType::INPUT) {
+        continue;
+      }
+      int x = 0;
+      int y = 0;
+      if (!iterm->getAvgXY(&x, &y)) {
+        if (odb::dbInst* inst = iterm->getInst()) {
+          inst->getLocation(x, y);
+        }
+      }
+
+      std::string name;
+      if (odb::dbInst* inst = iterm->getInst()) {
+        name = inst->getName();
+      }
+      name += "/";
+      if (odb::dbMTerm* mterm = iterm->getMTerm()) {
+        name += mterm->getName();
+      }
+      loads.push_back({iterm, x, y, std::move(name)});
+    }
+
+    const int fanout = static_cast<int>(loads.size());
+    if (fanout <= max_fanout) {
+      if (level == 0) {
+        logger_->info(utl::DFT,
+                      288,
+                      "Scan enable fanout={} (<= {}); no buffering needed.",
+                      fanout,
+                      max_fanout);
+      } else {
+        logger_->info(utl::DFT,
+                      289,
+                      "Scan enable buffering complete at level {} (fanout={}).",
+                      level,
+                      fanout);
+      }
+      break;
+    }
+
+    std::sort(loads.begin(),
+              loads.end(),
+              [](const LoadLoc& a, const LoadLoc& b) {
+                if (a.x != b.x) {
+                  return a.x < b.x;
+                }
+                if (a.y != b.y) {
+                  return a.y < b.y;
+                }
+                return a.name < b.name;
+              });
+
+    for (int start = 0; start < fanout; start += max_fanout) {
+      const int end = std::min(start + max_fanout, fanout);
+      const int count = end - start;
+      if (count <= 0) {
+        continue;
+      }
+
+      long long sum_x = 0;
+      long long sum_y = 0;
+      for (int i = start; i < end; ++i) {
+        sum_x += loads[i].x;
+        sum_y += loads[i].y;
+      }
+      const int cx = static_cast<int>(
+          std::llround(static_cast<double>(sum_x) / static_cast<double>(count)));
+      const int cy = static_cast<int>(
+          std::llround(static_cast<double>(sum_y) / static_cast<double>(count)));
+
+      const int group_id = start / max_fanout;
+      const std::string inst_name = "dft_scan_enable_buf_" + std::to_string(level)
+                                    + "_" + std::to_string(group_id);
+      odb::dbInst* buf_inst = block->findInst(inst_name.c_str());
+      if (buf_inst != nullptr) {
+        odb::dbInst::destroy(buf_inst);
+        buf_inst = nullptr;
+      }
+      buf_inst = odb::dbInst::create(block, master, inst_name.c_str());
+      if (buf_inst == nullptr) {
+        logger_->error(utl::DFT,
+                       290,
+                       "Failed to create scan enable buffer instance '{}'",
+                       inst_name);
+      }
+      buf_inst->setLocation(cx, cy);
+      buf_inst->setPlacementStatus(odb::dbPlacementStatus::PLACED);
+
+      odb::dbITerm* din = buf_inst->findITerm(in_pin.c_str());
+      odb::dbITerm* dout = buf_inst->findITerm(out_pin.c_str());
+      if (din == nullptr || dout == nullptr) {
+        logger_->error(utl::DFT,
+                       291,
+                       "Scan enable buffer instance '{}' missing expected pin(s) "
+                       "('{}' input, '{}' output).",
+                       inst_name,
+                       in_pin,
+                       out_pin);
+      }
+
+      din->connect(scan_enable_net);
+
+      const std::string net_name = "dft_scan_enable_net_" + std::to_string(level)
+                                   + "_" + std::to_string(group_id);
+      odb::dbNet* out_net = block->findNet(net_name.c_str());
+      if (out_net == nullptr) {
+        out_net = odb::dbNet::create(block, net_name.c_str());
+        if (out_net == nullptr) {
+          logger_->error(utl::DFT,
+                         292,
+                         "Failed to create scan enable buffer net '{}'",
+                         net_name);
+        }
+      }
+      out_net->setSigType(odb::dbSigType::SCAN);
+
+      dout->connect(out_net);
+
+      for (int i = start; i < end; ++i) {
+        odb::dbITerm* iterm = loads[i].iterm;
+        if (iterm == nullptr) {
+          continue;
+        }
+        iterm->disconnect();
+        iterm->connect(out_net);
+      }
+
+      ++total_inserted;
+    }
+  }
+
+  if (total_inserted > 0) {
+    logger_->info(utl::DFT,
+                  293,
+                  "Inserted {} buffer(s) for scan_enable (max_fanout={}, levels={}).",
+                  total_inserted,
+                  max_fanout,
+                  max_levels);
+  }
+
+  return total_inserted;
 }
 
 void Dft::writeScandef(const std::string& path) const

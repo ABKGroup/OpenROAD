@@ -81,6 +81,12 @@ class Dft
   // based on the scan chains stored in the database by execute_dft_plan.
   void writeScandef(const std::string& path) const;
 
+  // Buffers/splits the scan enable net to reduce fanout.
+  // Returns the number of inserted buffers.
+  int bufferScanEnable(const std::string& buffer_cell,
+                       int max_fanout,
+                       int max_levels);
+
   // Returns a mutable version of DftConfig
   DftConfig* getMutableDftConfig();
 

@@ -42,6 +42,38 @@ proc execute_dft_plan { args } {
   dft::execute_dft_plan
 }
 
+sta::define_cmd_args "buffer_scan_enable" { -buffer_cell buffer_cell
+                                            [-max_fanout max_fanout]
+                                            [-max_levels max_levels] }
+proc buffer_scan_enable { args } {
+  sta::parse_key_args "buffer_scan_enable" args \
+    keys {-buffer_cell -max_fanout -max_levels} \
+    flags {}
+
+  sta::check_argc_eq0 "buffer_scan_enable" $args
+
+  if { [ord::get_db_block] == "NULL" } {
+    utl::error DFT 295 "No design block found."
+  }
+  if { ![info exists keys(-buffer_cell)] } {
+    utl::error DFT 296 "Missing required -buffer_cell argument."
+  }
+
+  set max_fanout 64
+  if { [info exists keys(-max_fanout)] } {
+    set max_fanout $keys(-max_fanout)
+    sta::check_positive_integer "-max_fanout" $max_fanout
+  }
+
+  set max_levels 3
+  if { [info exists keys(-max_levels)] } {
+    set max_levels $keys(-max_levels)
+    sta::check_positive_integer "-max_levels" $max_levels
+  }
+
+  dft::buffer_scan_enable $keys(-buffer_cell) $max_fanout $max_levels
+}
+
 sta::define_cmd_args "write_scandef" { -file file }
 proc write_scandef { args } {
   sta::parse_key_args "write_scandef" args \

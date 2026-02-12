@@ -154,6 +154,12 @@ void execute_dft_plan()
   getDft()->executeDftPlan();
 }
 
+int buffer_scan_enable(const char* buffer_cell, int max_fanout, int max_levels)
+{
+  const std::string cell = (buffer_cell != nullptr) ? buffer_cell : "";
+  return getDft()->bufferScanEnable(cell, max_fanout, max_levels);
+}
+
 void set_dft_config_max_length(int max_length)
 {
   getDft()->getMutableDftConfig()->getMutableScanArchitectConfig()->setMaxLength(max_length);
