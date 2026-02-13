@@ -57,6 +57,17 @@ int64_t manhattanDist(const odb::Point& a, const odb::Point& b)
   return std::abs(dx) + std::abs(dy);
 }
 
+odb::Point scanCellMetricPoint(const ScanCell& cell)
+{
+  // Prefer scan pin coordinates for placement-aware metrics so we match the
+  // scan ordering objective (scan-out -> scan-in pin-to-pin distance).
+  const odb::Point fallback = cell.getOrigin();
+  const odb::Point scan_in = cell.getScanIn().getLocation(fallback);
+  const odb::Point scan_out = cell.getScanOut().getLocation(fallback);
+  return odb::Point((scan_in.x() + scan_out.x()) / 2,
+                    (scan_in.y() + scan_out.y()) / 2);
+}
+
 struct UnionFind
 {
   std::vector<std::size_t> parent;
@@ -1696,7 +1707,7 @@ std::vector<PlacedBundle> buildConstraintBundles(
       }
       const uint64_t bits = cell->getBits();
       sum_bits += bits;
-      const odb::Point origin = cell->getOrigin();
+      const odb::Point origin = scanCellMetricPoint(*cell);
       sum_x += static_cast<int64_t>(origin.x()) * static_cast<int64_t>(bits);
       sum_y += static_cast<int64_t>(origin.y()) * static_cast<int64_t>(bits);
       all_placed &= cell->isPlaced();
@@ -1710,7 +1721,7 @@ std::vector<PlacedBundle> buildConstraintBundles(
       const int64_t cy = sum_y / static_cast<int64_t>(sum_bits);
       bundle.origin = odb::Point(static_cast<int>(cx), static_cast<int>(cy));
     } else if (!bundle.cells.empty()) {
-      bundle.origin = bundle.cells.front()->getOrigin();
+      bundle.origin = scanCellMetricPoint(*bundle.cells.front());
     }
 
     if (bundle.bits == 0) {

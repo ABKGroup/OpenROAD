@@ -6,6 +6,7 @@
 #include <variant>
 
 #include "odb/db.h"
+#include "odb/geom.h"
 
 namespace dft {
 
@@ -27,6 +28,10 @@ class ScanPin
 
   odb::dbNet* getNet() const;
   std::string_view getName() const;
+  // Returns a representative point for this pin using the pin bbox lower-left
+  // corner when available. Falls back to the provided point when pin geometry
+  // is unavailable (e.g., null term).
+  odb::Point getLocation(const odb::Point& fallback) const;
   const std::variant<odb::dbBTerm*, odb::dbITerm*>& getValue() const;
 
  protected:

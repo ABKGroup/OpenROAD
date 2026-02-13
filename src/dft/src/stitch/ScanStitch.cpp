@@ -255,8 +255,10 @@ void InsertTimingBufferBetween(odb::dbDatabase* db,
     }
 
     if (prev_cell.isPlaced() || next_cell.isPlaced()) {
-      const odb::Point a = prev_cell.getOrigin();
-      const odb::Point b = next_cell.getOrigin();
+      const odb::Point a_fallback = prev_cell.getOrigin();
+      const odb::Point b_fallback = next_cell.getOrigin();
+      const odb::Point a = prev_cell.getScanOut().getLocation(a_fallback);
+      const odb::Point b = next_cell.getScanIn().getLocation(b_fallback);
       const int x = (prev_cell.isPlaced() && next_cell.isPlaced()) ? (a.x() + b.x()) / 2
                                                                    : (next_cell.isPlaced() ? b.x() : a.x());
       const int y = (prev_cell.isPlaced() && next_cell.isPlaced()) ? (a.y() + b.y()) / 2
@@ -392,8 +394,10 @@ void InsertLockupBetween(odb::dbDatabase* db,
 
     // Seed placement near the stitched cells when possible.
     if (prev_cell.isPlaced() || next_cell.isPlaced()) {
-      const odb::Point a = prev_cell.getOrigin();
-      const odb::Point b = next_cell.getOrigin();
+      const odb::Point a_fallback = prev_cell.getOrigin();
+      const odb::Point b_fallback = next_cell.getOrigin();
+      const odb::Point a = prev_cell.getScanOut().getLocation(a_fallback);
+      const odb::Point b = next_cell.getScanIn().getLocation(b_fallback);
       const int x = (prev_cell.isPlaced() && next_cell.isPlaced()) ? (a.x() + b.x()) / 2
                                                                    : (next_cell.isPlaced() ? b.x() : a.x());
       const int y = (prev_cell.isPlaced() && next_cell.isPlaced()) ? (a.y() + b.y()) / 2

@@ -306,26 +306,6 @@ int64_t manhattanPointToRectDist(const odb::Point& p,
   return dx + wy;
 }
 
-odb::Point scanPinLocation(const ScanPin& pin, const odb::Point& fallback)
-{
-  return std::visit(
-      overloaded{[&](odb::dbITerm* iterm) -> odb::Point {
-                   if (iterm == nullptr) {
-                     return fallback;
-                   }
-                   const odb::Rect bbox = iterm->getBBox();
-                   return odb::Point(bbox.xMin(), bbox.yMin());
-                 },
-                 [&](odb::dbBTerm* bterm) -> odb::Point {
-                   if (bterm == nullptr) {
-                     return fallback;
-                   }
-                   const odb::Rect bbox = bterm->getBBox();
-                   return odb::Point(bbox.xMin(), bbox.yMin());
-                 }},
-      pin.getValue());
-}
-
 namespace {
 std::string UnescapeSlash(std::string_view input)
 {
@@ -2436,8 +2416,8 @@ void OptimizeScanWirelengthPinToNet(std::vector<std::unique_ptr<ScanCell>>& cell
     origins.emplace_back(origin);
     names.emplace_back(cell->getName());
 
-    scan_in_pts.emplace_back(scanPinLocation(cell->getScanIn(), origin));
-    scan_out_pts.emplace_back(scanPinLocation(cell->getScanOut(), origin));
+    scan_in_pts.emplace_back(cell->getScanIn().getLocation(origin));
+    scan_out_pts.emplace_back(cell->getScanOut().getLocation(origin));
     net_geoms.emplace_back(buildNetAccessGeometry(cell->getScanOut().getNet()));
     timing_mul.emplace_back(timingMultiplierForCell(config, *cell));
   }
@@ -3105,9 +3085,9 @@ void OptimizeScanWirelength(
     timing_mul.reserve(n);
   for (const auto& cell : cells) {
     origins.emplace_back(cell->getOrigin());
-    scan_in_pts.emplace_back(scanPinLocation(cell->getScanIn(), origins.back()));
+    scan_in_pts.emplace_back(cell->getScanIn().getLocation(origins.back()));
     scan_out_pts.emplace_back(
-        scanPinLocation(cell->getScanOut(), origins.back()));
+        cell->getScanOut().getLocation(origins.back()));
     names.emplace_back(cell->getName());
     timing_mul.emplace_back(timingMultiplierForCell(*cfg, *cell));
   }

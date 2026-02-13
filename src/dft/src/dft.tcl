@@ -19,6 +19,24 @@ proc report_dft_plan { args } {
   dft::report_dft_plan $verbose
 }
 
+sta::define_cmd_args "report_dft_plan_pins" {[-verbose]}
+
+proc report_dft_plan_pins { args } {
+  sta::parse_key_args "report_dft_plan_pins" args \
+    keys {} \
+    flags {-verbose}
+
+  sta::check_argc_eq0 "report_dft_plan_pins" $args
+
+  if { [ord::get_db_block] == "NULL" } {
+    utl::error DFT 300 "No design block found."
+  }
+
+  set verbose [info exists flags(-verbose)]
+
+  dft::report_dft_plan_pins $verbose
+}
+
 sta::define_cmd_args "scan_replace" { }
 proc scan_replace { args } {
   sta::parse_key_args "scan_replace" args \

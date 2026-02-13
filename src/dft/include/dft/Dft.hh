@@ -59,6 +59,14 @@ class Dft
   // chains
   void reportDftPlan(bool verbose);
 
+  // Reports the scan plan in a machine-parseable format that includes scan
+  // pin locations (scan-in and scan-out) for each scan cell.
+  //
+  // This is intended for tooling/visualization to match the scan ordering
+  // objective, which is defined on scan pin locations rather than instance
+  // origins.
+  void reportDftPlanPins(bool verbose);
+
   // Inserts the scan chains into the design. For now this just replace the
   // cells in the design with scan equivalent. This functions mutates the
   // design.

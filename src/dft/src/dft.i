@@ -144,6 +144,11 @@ void report_dft_plan(bool verbose)
   getDft()->reportDftPlan(verbose);
 }
 
+void report_dft_plan_pins(bool verbose)
+{
+  getDft()->reportDftPlanPins(verbose);
+}
+
 void scan_replace()
 {
   getDft()->scanReplace();

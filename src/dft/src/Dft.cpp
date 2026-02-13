@@ -504,6 +504,58 @@ void Dft::reportDftPlan(bool verbose)
   logger_->report("");
 }
 
+void Dft::reportDftPlanPins(bool verbose)
+{
+  if (need_to_run_pre_dft_) {
+    pre_dft();
+  }
+
+  std::vector<std::unique_ptr<ScanChain>> scan_chains = scanArchitect();
+
+  odb::dbBlock* block = db_->getChip() ? db_->getChip()->getBlock() : nullptr;
+  const int dbu_per_micron = block ? block->getDbUnitsPerMicron() : 0;
+
+  logger_->report("DFT_PLAN_PINS_BEGIN");
+  if (dbu_per_micron > 0) {
+    logger_->report("DFT_DBU_PER_UM {}", dbu_per_micron);
+  }
+
+  for (const auto& scan_chain : scan_chains) {
+    if (!scan_chain) {
+      continue;
+    }
+    logger_->report("DFT_CHAIN {} {} {}",
+                    scan_chain->getName(),
+                    scan_chain->getScanCells().size(),
+                    scan_chain->getBits());
+
+    if (!verbose) {
+      continue;
+    }
+
+    const auto& cells = scan_chain->getScanCells();
+    for (std::size_t idx = 0; idx < cells.size(); ++idx) {
+      const auto& cell = cells[idx];
+      if (!cell) {
+        continue;
+      }
+      const odb::Point fallback = cell->getOrigin();
+      const odb::Point scan_in = cell->getScanIn().getLocation(fallback);
+      const odb::Point scan_out = cell->getScanOut().getLocation(fallback);
+      logger_->report("DFT_CELL {} {} {} {} {} {} {}",
+                      scan_chain->getName(),
+                      idx,
+                      cell->getName(),
+                      scan_in.x(),
+                      scan_in.y(),
+                      scan_out.x(),
+                      scan_out.y());
+    }
+  }
+
+  logger_->report("DFT_PLAN_PINS_END");
+}
+
 void Dft::scanReplace()
 {
   if (need_to_run_pre_dft_) {
