@@ -379,7 +379,7 @@ template <class RK> class RandomNormalT : public RK
         mutable bool   _cacheFull;
         mutable double _cachedValue;
     public:
-        RandomNormalT<RK>(double mean,
+        RandomNormalT(double mean,
                               double stdDev,
                               unsigned seed=UINT_MAX,
                               Verbosity verb=Verbosity("silent"))
@@ -390,7 +390,7 @@ template <class RK> class RandomNormalT : public RK
                                 _cachedValue(0.0)
                                 {}
 
-        RandomNormalT<RK>(double mean,
+        RandomNormalT(double mean,
                               double stdDev,
                               const char *locIdent,
                               unsigned counterOverride=UINT_MAX,
@@ -430,7 +430,7 @@ template <class RK> class RandomNormCorrPairsT
         const double _a1,_a2,_b1,_b2; // intermed values useful to precalc
 
     public:
-        RandomNormCorrPairsT<RK>(double mean1,double stdDev1,
+        RandomNormCorrPairsT(double mean1,double stdDev1,
                               double mean2, double stdDev2,
                               double correlation,
                               unsigned seed=UINT_MAX,
@@ -446,7 +446,7 @@ template <class RK> class RandomNormCorrPairsT
                                 _b2(_sigma2*_c/sqrt(1+_c*_c))
                                 {}
 
-        RandomNormCorrPairsT<RK>(double mean1,double stdDev1,
+        RandomNormCorrPairsT(double mean1,double stdDev1,
                               double mean2, double stdDev2,
                               double correlation,
                               const char *locIdent,
