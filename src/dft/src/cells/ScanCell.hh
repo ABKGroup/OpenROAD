@@ -39,6 +39,7 @@ class ScanCell
   virtual ScanLoad getScanEnable() const = 0;
   virtual ScanLoad getScanIn() const = 0;
   virtual ScanDriver getScanOut() const = 0;
+  virtual odb::dbInst* getDbInst() const = 0;
 
   const ClockDomain& getClockDomain() const;
   std::string_view getName() const;

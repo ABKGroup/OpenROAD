@@ -58,6 +58,7 @@ class PlacedScanCell final : public ScanCell
   }
   ScanLoad getScanIn() const override { return ScanLoad(scan_in_); }
   ScanDriver getScanOut() const override { return ScanDriver(scan_out_); }
+  odb::dbInst* getDbInst() const override { return nullptr; }
 
   odb::Point getOrigin() const override { return odb::Point(); }
   bool isPlaced() const override { return true; }

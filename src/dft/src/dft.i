@@ -120,6 +120,10 @@ utl::Logger* getLogger()
     $1 = 1;
   } else if (strcasecmp(str, "UCLA_SCANOPT") == 0) {
     $1 = 1;
+  } else if (strcasecmp(str, "ILS") == 0) {
+    $1 = 1;
+  } else if (strcasecmp(str, "OPENROAD_ILS") == 0) {
+    $1 = 1;
   } else {
     $1 = 0;
   }
@@ -127,9 +131,10 @@ utl::Logger* getLogger()
 
 %typemap(in) dft::ScanArchitectConfig::ScanOrderSolver {
   char *str = Tcl_GetStringFromObj($input, 0);
-  if (strcasecmp(str, "SCANOPT") == 0) {
+  if (strcasecmp(str, "ILS") == 0 || strcasecmp(str, "OPENROAD_ILS") == 0) {
     $1 = dft::ScanArchitectConfig::ScanOrderSolver::ScanOpt;
-  } else if (strcasecmp(str, "UCLA_SCANOPT") == 0) {
+  } else if (strcasecmp(str, "SCANOPT") == 0
+             || strcasecmp(str, "UCLA_SCANOPT") == 0) {
     $1 = dft::ScanArchitectConfig::ScanOrderSolver::UclaScanOpt;
   } else /* other values eliminated in typecheck */ {
     $1 = dft::ScanArchitectConfig::ScanOrderSolver::Heuristic;
@@ -291,6 +296,30 @@ void set_dft_config_shift_register_min_length(int min_length)
       ->getMutableDftConfig()
       ->getMutableScanArchitectConfig()
       ->setShiftRegisterMinLength(min_length);
+}
+
+void set_dft_config_use_existing_scan_chains(int enabled)
+{
+  getDft()
+      ->getMutableDftConfig()
+      ->getMutableScanArchitectConfig()
+      ->setUseExistingScanChains(enabled != 0);
+}
+
+void set_dft_config_split_multibit_scan_cells(int enabled)
+{
+  getDft()
+      ->getMutableDftConfig()
+      ->getMutableScanArchitectConfig()
+      ->setSplitMultibitScanCells(enabled != 0);
+}
+
+void set_dft_config_error_on_power_domain_crossings(int enabled)
+{
+  getDft()
+      ->getMutableDftConfig()
+      ->getMutableScanArchitectConfig()
+      ->setErrorOnPowerDomainCrossings(enabled != 0);
 }
 
 void set_dft_config_scan_order_constraints_file(const char* path_ptr)

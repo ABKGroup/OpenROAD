@@ -4,12 +4,12 @@ read_lef sky130hd/sky130hd.tlef
 read_lef sky130hd/sky130_fd_sc_hd_merged.lef
 read_liberty sky130hd/sky130_fd_sc_hd__tt_025C_1v80.lib
 
-read_verilog place_sort_sky130.v
+read_verilog ucla_scanopt_place_sort_sky130.v
 link_design place_sort
 
 create_clock -name main_clock -period 2.0000 -waveform {0.0000 1.0000} [get_ports {clock}]
 
-set_dft_config -max_length 10 -scan_order_solver ILS
+set_dft_config -max_length 10 -scan_order_solver SCANOPT
 
 scan_replace
 
@@ -34,6 +34,6 @@ place_inst ff10_clk1_rising 3000 3000
 report_dft_plan -verbose
 execute_dft_plan
 
-set verilog_file [make_result_file place_sort_sky130.v]
+set verilog_file [make_result_file ucla_scanopt_place_sort_sky130.v]
 write_verilog $verilog_file
-diff_files $verilog_file place_sort_sky130.vok
+diff_files $verilog_file ucla_scanopt_place_sort_sky130.vok

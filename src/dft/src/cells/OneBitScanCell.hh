@@ -11,12 +11,15 @@
 
 namespace dft {
 
-// A simple single cell with just one bit. Usually one scan FF
+// A scan cell represented by a single instance with one scan-in/out pair.
+// This is typically a one-bit scan FF, but can also represent a multi-bit scan
+// element when the library shifts multiple bits internally.
 class OneBitScanCell : public ScanCell
 {
  public:
   OneBitScanCell(const std::string& name,
                  std::unique_ptr<ClockDomain> clock_domain,
+                 uint64_t bits,
                  odb::dbInst* inst,
                  sta::LibertyPort* scan_in_port,
                  sta::LibertyPort* scan_enable_port,
@@ -34,6 +37,7 @@ class OneBitScanCell : public ScanCell
   ScanLoad getScanEnable() const override;
   ScanLoad getScanIn() const override;
   ScanDriver getScanOut() const override;
+  odb::dbInst* getDbInst() const override;
 
   odb::Point getOrigin() const override;
   bool isPlaced() const override;
@@ -42,6 +46,7 @@ class OneBitScanCell : public ScanCell
   odb::dbITerm* findITerm(sta::LibertyPort* liberty_port) const;
 
   odb::dbInst* inst_;
+  uint64_t bits_{1};
   sta::LibertyPort* scan_in_port_;
   sta::LibertyPort* scan_enable_port_;
   sta::LibertyPort* scan_out_port_;

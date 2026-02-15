@@ -46,6 +46,9 @@ The command `set_dft_config` sets the DFT configuration variables.
 	    [-exclude_shift_registers <bool>]
 	    [-prefer_qbar <bool>]
 	    [-shift_register_min_length <int>]
+	    [-use_existing_scan_chains <bool>]
+	    [-split_multibit_scan_cells <bool>]
+	    [-error_on_power_domain_crossings <bool>]
 	    [-scan_order_constraints_file <path>]
 	    [-scan_enable_name_pattern <string>]
 	    [-scan_in_name_pattern <string>]
@@ -69,16 +72,16 @@ The command `set_dft_config` sets the DFT configuration variables.
 | `-max_length` | Hard maximum number of bits per scan chain. When set, infeasible constraints (e.g., groups larger than `max_length`) will error. |
 | `-chain_count` | Exact total number of scan chains across the design. This takes priority over `max_chains`/`max_length` chain-count inference. In `no_mix`, this total will be distributed across clock domains as needed (at least one chain per clock). |
 | `-max_chains` | Maximum total number of scan chains across the design. In `no_mix`, this must be at least the number of clock domains. |
-| `-max_imbalance` | Maximum allowed chain length imbalance (percent). Constraint: `max(bits)/min(bits) <= 1 + max_imbalance/100`. Default is `30`. |
+| `-max_imbalance` | Maximum allowed chain length imbalance (percent). Constraint: `max(bits)/min(bits) <= 1 + max_imbalance/100`. Default is `2`. |
 | `-clock_mixing` | How scan cells are partitioned into chains by clock. `no_mix` (default) does not mix different clock domains in a chain. `clock_mix` mixes clock domains (requires lockup insertion between domains). |
 | `-polarity_mode` | How scan cells of different edge polarity are handled within a chain. `strict` (default) forbids mixing polarities within a chain, requiring separate chains when both polarities are present. `mid` allows mixed polarity, stitching falling-edge cells before rising-edge cells in each chain. |
 | `-scan_order_metric` | Metric for ordering scan cells within each chain. `PLACEMENT` uses scan-pin Manhattan distance. `PIN_TO_NET` uses pin-to-net distance to global-route guides (or detailed routes when present), falling back to placement distance. |
-| `-scan_order_solver` | Scan ordering solver. `HEURISTIC` is greedy + local cleanup. `SCANOPT` is an iterated local search (default). `UCLA_SCANOPT` uses the UCLA ScanOptpack-010411 reference implementation (fixed begin/end only; placement metric). |
-| `-scanopt_rounds` | Iteration budget for `-scan_order_solver SCANOPT` (default `500000`). |
-| `-scanopt_seed` | Random seed for `-scan_order_solver SCANOPT` (default `1`). |
-| `-scanopt_time_limit` | Total time budget (seconds) for `SCANOPT` ordering across all scan chains. OpenROAD splits the budget across chains to keep runtime bounded as chain count increases. `0` means unlimited. |
-| `-scanopt_temp_control` | Enable temperature control (optional uphill acceptance) for `SCANOPT` (`0`/`1`). |
-| `-scanopt_t_div` | Temperature divisor for `SCANOPT` temperature control (larger reduces uphill acceptance). |
+| `-scan_order_solver` | Scan ordering solver. `HEURISTIC` is greedy + local cleanup. `SCANOPT` uses the UCLA ScanOptpack-010411 reference implementation (`PLACEMENT` only; begin/end are inferred if not provided; used as a preference when constraints are present). `ILS` selects the OpenROAD in-tree iterated local search solver (used automatically for `PIN_TO_NET`). |
+| `-scanopt_rounds` | Iteration budget for scan ordering solvers (`SCANOPT`/`ILS`) (default `500000`). |
+| `-scanopt_seed` | Random seed for scan ordering solvers (`SCANOPT`/`ILS`) (default `1`). |
+| `-scanopt_time_limit` | Total time budget (seconds) for `ILS` ordering across all scan chains. OpenROAD splits the budget across chains to keep runtime bounded as chain count increases. `0` means unlimited. Note: UCLA `SCANOPT` does not currently honor this time limit for `PLACEMENT`. |
+| `-scanopt_temp_control` | Enable temperature control (optional uphill acceptance) for `SCANOPT`/`ILS` (`0`/`1`). |
+| `-scanopt_t_div` | Temperature divisor for `ILS` temperature control (larger reduces uphill acceptance). |
 | `-vertical_weight` | Preferred wiring direction tuning. Values `>1` penalize vertical movement more than horizontal. Default `1.0`. |
 | `-blockage_weight` | Blockage-aware ordering penalty weight. Adds an estimated detour cost when a straight rectilinear scan connection would cross hard macros / placement blockages. `0` disables. Default `1.0`. |
 | `-timing_setup_weight` | Optional timing-aware ordering penalty weight (setup). |
@@ -87,6 +90,9 @@ The command `set_dft_config` sets the DFT configuration variables.
 | `-exclude_shift_registers` | Automatically detect simple functional shift-register chains (direct Q→D connections) and exclude them from `scan_replace` and scan planning (`0`/`1`). |
 | `-prefer_qbar` | Prefer using the complemented output (`QN`/`Q_N`) as scan-out when the library does not tag a scan-out port (`0`/`1`). This can reduce added load on functional `Q` nets, at the cost of introducing inversion in the scan path. |
 | `-shift_register_min_length` | Minimum chain length to classify as a shift register when `-exclude_shift_registers` is enabled (must be `>= 2`). Default is `4`. |
+| `-use_existing_scan_chains` | Use scan chains already stored in ODB (e.g. imported via `read_def -incremental` from a SCANDEF) as the scan plan for `report_dft_plan`, `execute_dft_plan`, and `scan_opt` instead of re-architecting. |
+| `-split_multibit_scan_cells` | When enabled, split scan cells with multiple scan-in/out pairs (e.g., `SI[0..N-1]`/`SO[0..N-1]`) into multiple scan elements so each external scan pair is included in planning/stitching (`0`/`1`). |
+| `-error_on_power_domain_crossings` | When enabled, treat power-domain crossing warnings (voltage mismatch, switched domains, or incomplete assignments) as errors (`0`/`1`). |
 | `-scan_order_constraints_file` | Path to a scan ordering constraints file (see “Scan Ordering Constraints File” below). |
 | `-scan_enable_name_pattern` | A format pattern with one or less set of braces (`{}`) to use to find or create scan enable drivers during scan chain stitching. The braces, if found, will be set to `0` as DFT architectures typically use a single shift-enable for all scan chains. If an un-escaped forward slash (`/`) is found, instead of searching for and/or creating a top-level port, an instance's pin will be searched for instead where the part of the string preceding the `/` is interpreted as the instance name and part succeeding it will be interpreted as the pin's name. |
 | `-scan_in_name_pattern` | A format pattern with one or less braces (`{}`) to use to find or create scan in drivers during scan chain stitching. The braces will be replaced with the chain's ordinal number (starting at `0`). If an un-escaped forward slash (`/`) is found, instead of searching for and/or creating a top-level port, an instance's pin will be searched for instead where the part of the string preceding the `/` is interpreted as the instance name and part succeeding it will be interpreted as the pin's name. |
@@ -225,8 +231,8 @@ Simply run the following script:
 
 * Scan-chain optimization is heuristic and still evolving.
 * Scan endpoints are controlled via the `-scan_*_name_pattern` options; OpenROAD will reuse matching existing ports/pins or create new ones when needed.
-* There is currently no way to provide a full user-defined scan path (only partial constraints like `path`/`fixed_edge`).
-* We can only work with one bit cells.
+* Full user-defined scan paths are supported by importing a DEF/SCANDEF `SCANCHAINS` section into ODB (e.g. `read_def -incremental`) and setting `set_dft_config -use_existing_scan_chains 1`.
+* Multi-bit scan elements are supported for chain-length accounting when the library shifts multiple bits through a single scan-in/out pair; cells with multiple external scan-in/out pairs are not re-architected automatically.
 
 ## License
 

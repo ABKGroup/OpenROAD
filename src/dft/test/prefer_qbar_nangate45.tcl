@@ -9,7 +9,7 @@ link_design scan_architect_no_mix_nangate45
 
 create_clock -name clk -period 2.0000 -waveform {0.0000 1.0000} [get_ports clk]
 
-set_dft_config -max_length 10 -clock_mixing no_mix -prefer_qbar 1
+set_dft_config -max_length 10 -clock_mixing no_mix -prefer_qbar 1 -scan_order_solver ILS
 
 scan_replace
 execute_dft_plan
@@ -22,4 +22,3 @@ write_scandef -file $out_scandef
 cd $cwd
 
 diff_files [file join $result_dir $out_scandef] prefer_qbar_nangate45.scandefok
-

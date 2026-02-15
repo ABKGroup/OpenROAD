@@ -196,7 +196,7 @@ odb::dbNet* FindClockNet(odb::dbBlock* block,
                          const dft::ScanCell& scan_cell,
                          utl::Logger* logger)
 {
-  odb::dbInst* inst = block->findInst(std::string(scan_cell.getName()).c_str());
+  odb::dbInst* inst = scan_cell.getDbInst();
   if (inst == nullptr) {
     logger->error(utl::DFT,
                   104,
@@ -517,6 +517,23 @@ void ScanStitch::Stitch(
   // while requesting multiple chains, which would otherwise silently create
   // multiple chains sharing the same top-level ports.
   if (scan_chains.size() > 1) {
+    const auto term_name =
+        [&](const std::variant<odb::dbBTerm*, odb::dbITerm*>& term) -> std::string {
+      return std::visit(
+          [&](auto&& t) -> std::string {
+            if (t == nullptr) {
+              return "";
+            }
+            using T = std::decay_t<decltype(t)>;
+            if constexpr (std::is_same_v<T, odb::dbBTerm*>) {
+              return std::string(t->getName());
+            } else {
+              return fmt::format("{}/{}", t->getInst()->getName(), t->getMTerm()->getName());
+            }
+          },
+          term);
+    };
+
     std::unordered_set<std::string> in_names;
     std::unordered_set<std::string> out_names;
     in_names.reserve(scan_chains.size() * 2);
@@ -524,6 +541,8 @@ void ScanStitch::Stitch(
 
     for (std::size_t ordinal = 0; ordinal < scan_chains.size(); ++ordinal) {
       const ScanChain& scan_chain = *scan_chains[ordinal];
+      const std::optional<ScanDriver> preset_in = scan_chain.getScanIn();
+      const std::optional<ScanLoad> preset_out = scan_chain.getScanOut();
       const std::optional<ScanArchitectConfig::ChainEndpoints> endpoints
           = architect_config_.getChainEndpoints(scan_chain.getName());
 
@@ -545,14 +564,20 @@ void ScanStitch::Stitch(
       std::string scan_in_name;
       std::string scan_out_name;
       try {
-        scan_in_name = begin_term.has_value()
-                           ? std::string(begin_term.value())
-                           : fmt::format(FMT_RUNTIME(config_.getInNamePattern()),
-                                         ordinal);
-        scan_out_name = end_term.has_value()
-                            ? std::string(end_term.value())
-                            : fmt::format(FMT_RUNTIME(config_.getOutNamePattern()),
-                                          ordinal);
+        scan_in_name = preset_in.has_value()
+                           ? term_name(preset_in->getValue())
+                           : (begin_term.has_value()
+                                  ? std::string(begin_term.value())
+                                  : fmt::format(
+                                        FMT_RUNTIME(config_.getInNamePattern()),
+                                        ordinal));
+        scan_out_name = preset_out.has_value()
+                            ? term_name(preset_out->getValue())
+                            : (end_term.has_value()
+                                   ? std::string(end_term.value())
+                                   : fmt::format(
+                                         FMT_RUNTIME(config_.getOutNamePattern()),
+                                         ordinal));
       } catch (...) {
         logger_->error(
             utl::DFT,
@@ -612,9 +637,15 @@ void ScanStitch::Stitch(odb::dbBlock* block,
   const std::optional<ScanArchitectConfig::ChainEndpoints> endpoints
       = architect_config_.getChainEndpoints(scan_chain.getName());
 
-  auto scan_enable_name
-      = fmt::format(FMT_RUNTIME(config_.getEnableNamePattern()), kEnableNumber);
-  auto scan_enable_driver = FindOrCreateScanEnable(block, scan_enable_name);
+  ScanDriver scan_enable_driver = [&]() -> ScanDriver {
+    const std::optional<ScanDriver> preset = scan_chain.getScanEnable();
+    if (preset.has_value()) {
+      return preset.value();
+    }
+    auto scan_enable_name = fmt::format(FMT_RUNTIME(config_.getEnableNamePattern()),
+                                        kEnableNumber);
+    return FindOrCreateScanEnable(block, scan_enable_name);
+  }();
 
   std::optional<odb::Point> begin_pt;
   std::optional<odb::Point> end_pt;
@@ -639,11 +670,16 @@ void ScanStitch::Stitch(odb::dbBlock* block,
     }
   }
 
-  const std::string scan_in_name
-      = begin_term.has_value()
-            ? std::string(begin_term.value())
-            : fmt::format(FMT_RUNTIME(config_.getInNamePattern()), ordinal);
+  const std::optional<ScanDriver> preset_scan_in = scan_chain.getScanIn();
+  const bool use_preset_scan_in = preset_scan_in.has_value();
+  const std::string scan_in_name =
+      begin_term.has_value()
+          ? std::string(begin_term.value())
+          : fmt::format(FMT_RUNTIME(config_.getInNamePattern()), ordinal);
   ScanDriver scan_in_driver = [&]() -> ScanDriver {
+    if (preset_scan_in.has_value()) {
+      return preset_scan_in.value();
+    }
     if (begin_term.has_value()) {
       const auto term_info = SplitTermIdentifier(std::string_view(scan_in_name));
       if (term_info.second.has_value()) {
@@ -674,7 +710,7 @@ void ScanStitch::Stitch(odb::dbBlock* block,
     }
     return driver;
   }();
-  if (begin_pt.has_value()) {
+  if (!use_preset_scan_in && begin_pt.has_value()) {
     std::visit(
         [&](auto&& term) {
           if (term == nullptr) {
@@ -687,7 +723,7 @@ void ScanStitch::Stitch(odb::dbBlock* block,
         },
         scan_in_driver.getValue());
   }
-  if (!begin_pt.has_value()) {
+  if (!use_preset_scan_in && !begin_pt.has_value()) {
     std::visit(
         [&](auto&& term) {
           if (term == nullptr) {
@@ -762,11 +798,16 @@ void ScanStitch::Stitch(odb::dbBlock* block,
 
   // Let's connect the last cell
   const std::unique_ptr<ScanCell>& last_scan_cell = scan_cells.back();
-  const std::string scan_out_name
-      = end_term.has_value()
-            ? std::string(end_term.value())
-            : fmt::format(FMT_RUNTIME(config_.getOutNamePattern()), ordinal);
+  const std::optional<ScanLoad> preset_scan_out = scan_chain.getScanOut();
+  const bool use_preset_scan_out = preset_scan_out.has_value();
+  const std::string scan_out_name =
+      end_term.has_value()
+          ? std::string(end_term.value())
+          : fmt::format(FMT_RUNTIME(config_.getOutNamePattern()), ordinal);
   ScanLoad scan_out_load = [&]() -> ScanLoad {
+    if (preset_scan_out.has_value()) {
+      return preset_scan_out.value();
+    }
     if (end_term.has_value()) {
       const auto term_info = SplitTermIdentifier(std::string_view(scan_out_name));
       if (term_info.second.has_value()) {
@@ -806,7 +847,7 @@ void ScanStitch::Stitch(odb::dbBlock* block,
     }
     return load;
   }();
-  if (end_pt.has_value()) {
+  if (!use_preset_scan_out && end_pt.has_value()) {
     std::visit(
         [&](auto&& term) {
           if (term == nullptr) {
@@ -819,7 +860,7 @@ void ScanStitch::Stitch(odb::dbBlock* block,
         },
         scan_out_load.getValue());
   }
-  if (!end_pt.has_value()) {
+  if (!use_preset_scan_out && !end_pt.has_value()) {
     std::visit(
         [&](auto&& term) {
           if (term == nullptr) {

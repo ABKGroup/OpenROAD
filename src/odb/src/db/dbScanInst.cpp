@@ -167,10 +167,22 @@ void dbScanInst::setScanEnable(dbITerm* scan_enable)
 std::variant<dbBTerm*, dbITerm*> dbScanInst::getScanEnable() const
 {
   _dbScanInst* scan_inst = (_dbScanInst*) this;
+  if (!scan_inst->scan_enable_.isValid()) {
+    return std::variant<dbBTerm*, dbITerm*>((dbBTerm*) nullptr);
+  }
   _dbBlock* block = (_dbBlock*) scan_inst->getOwner();
+  if (block == nullptr) {
+    return std::variant<dbBTerm*, dbITerm*>((dbBTerm*) nullptr);
+  }
   _dbDft* dft = (_dbDft*) block->_dft_tbl->getPtr(block->_dft);
+  if (dft == nullptr || dft->scan_pins_ == nullptr) {
+    return std::variant<dbBTerm*, dbITerm*>((dbBTerm*) nullptr);
+  }
   const dbScanPin* scan_enable = (dbScanPin*) dft->scan_pins_->getPtr(
       (dbId<_dbScanPin>) scan_inst->scan_enable_);
+  if (scan_enable == nullptr) {
+    return std::variant<dbBTerm*, dbITerm*>((dbBTerm*) nullptr);
+  }
   return scan_enable->getPin();
 }
 

@@ -1,0 +1,53 @@
+[INFO ODB-0227] LEF file: sky130hd/sky130hd.tlef, created 13 layers, 25 vias
+[INFO ODB-0227] LEF file: sky130hd/sky130_fd_sc_hd_merged.lef, created 437 library cells
+[INFO ODB-0128] Design: one_cell
+[INFO ODB-0130]     Created 4 pins.
+[INFO ODB-0131]     Created 1 components and 6 component-terminals.
+[INFO ODB-0133]     Created 4 nets and 4 connections.
+DFT Config:
+***************************
+DFT Config Report:
+
+Scan Architect Config:
+- Chain Count: Undefined
+- Max Length: 10
+- Max Chains: Undefined
+- Clock Mixing: No Mix
+- Polarity Mode: Strict
+- Scan Enable Name Pattern: scan_enable_{}
+- Scan In Name Pattern: scan_in_{}
+- Scan Out Name Pattern: scan_out_{}
+- Scan Order Metric: Placement (pin-to-pin)
+- Scan Order Solver: ScanOpt
+- Vertical Weight: 1.000
+- Blockage Weight: 1.000
+- Max Imbalance: 2.0%
+- ScanOpt Rounds: 500000
+- ScanOpt Seed: 1
+- ScanOpt Temp Control: false
+- ScanOpt TDiv: 100.000 (ILS only)
+- ScanOpt Time Limit: 300.000s (ILS only)
+- Split Multibit Scan Cells: yes
+- Power Domain Crossings: error
+Scan Stitch Config:
+- Scan Enable Name Pattern: 'scan_enable_{}'
+- Scan In Name Pattern: 'scan_in_{}'
+- Scan Out Name Pattern: 'scan_out_{}'
+- Insert Lockup Elements: false
+- Timing Buffer Cell: ''
+***************************
+[WARNING DFT-0212] Scan constraints: endpoint port 'scan_in_0' not found; ignoring endpoint.
+[WARNING DFT-0212] Scan constraints: endpoint port 'scan_out_0' not found; ignoring endpoint.
+***************************
+Report DFT Plan
+Number of chains: 1
+Clock domain: No Mix
+***************************
+
+Scan chain 'chain_0' has 1 cells (1 bits)
+
+
+[WARNING DFT-0212] Scan constraints: endpoint port 'scan_in_0' not found; ignoring endpoint.
+[WARNING DFT-0212] Scan constraints: endpoint port 'scan_out_0' not found; ignoring endpoint.
+[WARNING DFT-0226] Scan chain 'chain_0' scan-in port 'scan_in_0' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
+[WARNING DFT-0230] Scan chain 'chain_0' scan-out port 'scan_out_0' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)

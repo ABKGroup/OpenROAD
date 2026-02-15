@@ -11,11 +11,13 @@ package(
 cc_library(
     name = "cells",
     srcs = [
+        "DbScanCell.cpp",
         "OneBitScanCell.cpp",
         "ScanCell.cpp",
         "ScanCellFactory.cpp",
     ],
     hdrs = [
+        "DbScanCell.hh",
         "OneBitScanCell.hh",
         "ScanCell.hh",
         "ScanCellFactory.hh",

@@ -131,6 +131,9 @@ sta::define_cmd_args "set_dft_config" { [-max_length max_length]
                                         [-exclude_shift_registers exclude_shift_registers]
                                         [-prefer_qbar prefer_qbar]
                                         [-shift_register_min_length shift_register_min_length]
+                                        [-use_existing_scan_chains use_existing_scan_chains]
+                                        [-split_multibit_scan_cells split_multibit_scan_cells]
+                                        [-error_on_power_domain_crossings error_on_power_domain_crossings]
                                         [-scan_order_constraints_file scan_order_constraints_file]
                                         [-scan_enable_name_pattern scan_enable_name_pattern]
                                         [-scan_in_name_pattern scan_in_name_pattern]
@@ -170,6 +173,9 @@ proc set_dft_config { args } {
       -exclude_shift_registers
       -prefer_qbar
       -shift_register_min_length
+      -use_existing_scan_chains
+      -split_multibit_scan_cells
+      -error_on_power_domain_crossings
       -scan_order_constraints_file
       -scan_enable_name_pattern
       -scan_in_name_pattern
@@ -342,6 +348,30 @@ proc set_dft_config { args } {
       utl::error DFT 252 "Expected -shift_register_min_length >= 2"
     }
     dft::set_dft_config_shift_register_min_length $n
+  }
+
+  if { [info exists keys(-use_existing_scan_chains)] } {
+    set v $keys(-use_existing_scan_chains)
+    if { ![string is boolean -strict $v] } {
+      utl::error DFT 315 "-use_existing_scan_chains must be a boolean (0/1/true/false)"
+    }
+    dft::set_dft_config_use_existing_scan_chains [expr {$v ? 1 : 0}]
+  }
+
+  if { [info exists keys(-split_multibit_scan_cells)] } {
+    set v $keys(-split_multibit_scan_cells)
+    if { ![string is boolean -strict $v] } {
+      utl::error DFT 317 "-split_multibit_scan_cells must be a boolean (0/1/true/false)"
+    }
+    dft::set_dft_config_split_multibit_scan_cells [expr {$v ? 1 : 0}]
+  }
+
+  if { [info exists keys(-error_on_power_domain_crossings)] } {
+    set v $keys(-error_on_power_domain_crossings)
+    if { ![string is boolean -strict $v] } {
+      utl::error DFT 318 "-error_on_power_domain_crossings must be a boolean (0/1/true/false)"
+    }
+    dft::set_dft_config_error_on_power_domain_crossings [expr {$v ? 1 : 0}]
   }
 
   if { [info exists keys(-scan_order_constraints_file)] } {

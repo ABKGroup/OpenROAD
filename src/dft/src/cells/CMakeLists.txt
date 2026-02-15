@@ -3,6 +3,7 @@
 
 add_library(dft_cells_lib
   # Keep sorted
+  DbScanCell.cpp
   OneBitScanCell.cpp
   ScanCellFactory.cpp
 )

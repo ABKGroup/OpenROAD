@@ -34,6 +34,12 @@ void ScanChain::add(std::unique_ptr<ScanCell> scan_cell)
   }
 }
 
+void ScanChain::addOrdered(std::unique_ptr<ScanCell> scan_cell)
+{
+  bits_ += scan_cell->getBits();
+  scan_cells_.push_back(std::move(scan_cell));
+}
+
 bool ScanChain::empty() const
 {
   return scan_cells_.empty();

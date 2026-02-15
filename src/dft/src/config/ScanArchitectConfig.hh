@@ -43,8 +43,8 @@ class ScanArchitectConfig
   enum class ScanOrderSolver
   {
     Heuristic,  // Greedy + local search heuristics (fast)
-    ScanOpt,    // ScanOpt-style iterated local search (higher quality)
-    UclaScanOpt // UCLA ScanOptpack-010411 (reference implementation)
+    ScanOpt,    // OpenROAD in-tree iterated local search ("ILS")
+    UclaScanOpt // ScanOptpack-010411 (UCLA reference implementation; "SCANOPT")
   };
 
   struct ScanOrderGroupConstraint
@@ -231,6 +231,24 @@ class ScanArchitectConfig
   std::optional<ChainEndpoints> getChainEndpoints(
       std::string_view chain_name) const;
 
+  // When enabled, DFT uses scan chains already stored in ODB (e.g. imported via
+  // DEF/SCANDEF `read_def -incremental`) as the scan plan for
+  // report/execute/scan_opt instead of re-architecting.
+  void setUseExistingScanChains(bool enable);
+  bool getUseExistingScanChains() const;
+
+  // When enabled, scan cells with multiple scan-in/out pin pairs (e.g. MBFFs
+  // with SI[0..N-1]/SO[0..N-1]) are split into multiple scan elements so each
+  // external scan pair can be planned/stiched.
+  void setSplitMultibitScanCells(bool enable);
+  bool getSplitMultibitScanCells() const;
+
+  // When enabled, treat power-domain crossing warnings as errors (fails
+  // planning/stitching when scan chains cross voltage domains or switched
+  // domains).
+  void setErrorOnPowerDomainCrossings(bool enable);
+  bool getErrorOnPowerDomainCrossings() const;
+
   // Optional explicit chain names (in file order).
   const std::vector<std::string>& getChainNames() const;
 
@@ -276,12 +294,12 @@ class ScanArchitectConfig
   ScanOrderMetric scan_order_metric_{ScanOrderMetric::Placement};
 
   // Which solver to use for scan ordering.
-  ScanOrderSolver scan_order_solver_{ScanOrderSolver::ScanOpt};
+  ScanOrderSolver scan_order_solver_{ScanOrderSolver::UclaScanOpt};
 
   // ScanOpt-style solver tuning knobs.
   uint64_t scanopt_rounds_{500000};
   uint64_t scanopt_seed_{1};
-  double scanopt_time_limit_seconds_{15.0};
+  double scanopt_time_limit_seconds_{300.0};
   bool scanopt_temp_control_{false};
   double scanopt_t_div_{100.0};
 
@@ -311,6 +329,15 @@ class ScanArchitectConfig
   std::vector<std::string> chain_names_;
   std::unordered_map<std::string, ChainEndpoints> chain_endpoints_by_name_;
 
+  // If enabled, use scan chains already present in ODB as the plan.
+  bool use_existing_scan_chains_{false};
+
+  // If enabled, split multi-scan-port scan cells into multiple scan elements.
+  bool split_multibit_scan_cells_{false};
+
+  // If enabled, error out on power-domain crossings in the scan plan.
+  bool error_on_power_domain_crossings_{false};
+
   // Optional instance->chain assignment constraints (resolved from file).
   std::unordered_map<std::string, std::string> instance_to_chain_name_;
 
@@ -330,7 +357,7 @@ class ScanArchitectConfig
   bool prefer_qbar_scan_out_{false};
 
   // Length balance constraint (percent).
-  double max_imbalance_percent_{30.0};
+  double max_imbalance_percent_{2.0};
 };
 
 }  // namespace dft

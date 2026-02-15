@@ -9,7 +9,7 @@ link_design scan_architect_no_mix_nangate45
 
 create_clock -name clk -period 2.0000 -waveform {0.0000 1.0000} [get_ports clk]
 
-set_dft_config -max_length 10 -clock_mixing no_mix
+set_dft_config -max_length 10 -clock_mixing no_mix -scan_order_solver ILS
 
 scan_replace
 report_dft_plan -verbose

@@ -9,7 +9,7 @@ link_design place_sort
 
 create_clock -name main_clock -period 2.0000 -waveform {0.0000 1.0000} [get_ports {clock}]
 
-set_dft_config -max_length 10 -scan_order_solver ILS
+set_dft_config -max_length 10
 
 scan_replace
 
@@ -31,9 +31,9 @@ place_inst ff8_clk1_rising 4000 3000
 place_inst ff9_clk1_rising 8000 8000
 place_inst ff10_clk1_rising 3000 3000
 
-report_dft_plan -verbose
 execute_dft_plan
 
-set verilog_file [make_result_file place_sort_sky130.v]
-write_verilog $verilog_file
-diff_files $verilog_file place_sort_sky130.vok
+set inserted [buffer_scan_enable -buffer_cell sky130_fd_sc_hd__buf_1 -max_fanout 3 -max_levels 3]
+puts "buffer_scan_enable inserted=$inserted"
+check "buffer_scan_enable inserts buffers" {expr {$inserted > 0}} 1
+

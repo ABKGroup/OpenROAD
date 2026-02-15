@@ -10,7 +10,7 @@ link_design scan_architect
 create_clock -name clock1 -period 2.0000 -waveform {0.0000 1.0000} [get_ports {clock1}]
 create_clock -name clock2 -period 2.0000 -waveform {0.0000 1.0000} [get_ports {clock2}]
 
-set_dft_config -max_length 5
+set_dft_config -max_length 5 -scan_order_solver ILS
 
 scan_replace
 

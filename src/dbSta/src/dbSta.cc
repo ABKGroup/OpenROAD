@@ -1131,23 +1131,57 @@ sta::LibertyPort* getLibertyScanEnable(const sta::LibertyCell* lib_cell)
     return *lhs == '\0' && *rhs == '\0';
   };
 
+  auto matches_prefix_or_exact_ignore_case =
+      [&](const char* name, const char* prefix) -> bool {
+    if (equals_ignore_case(name, prefix)) {
+      return true;
+    }
+    if (name == nullptr || prefix == nullptr) {
+      return false;
+    }
+    const std::size_t n = std::strlen(name);
+    const std::size_t p = std::strlen(prefix);
+    if (n <= p) {
+      return false;
+    }
+    for (std::size_t i = 0; i < p; ++i) {
+      if (std::tolower(static_cast<unsigned char>(name[i]))
+          != std::tolower(static_cast<unsigned char>(prefix[i]))) {
+        return false;
+      }
+    }
+    const char next = name[p];
+    if (std::isdigit(static_cast<unsigned char>(next)) || next == '[') {
+      return true;
+    }
+    if (next == '_' && (p + 1) < n
+        && std::isdigit(static_cast<unsigned char>(name[p + 1]))) {
+      return true;
+    }
+    return false;
+  };
+
   // Fallback for libraries that do not tag scan pins via Liberty signal_type.
   // Common pin names include SE/SCE/SCAN_EN/SCAN_ENABLE.
   sta::LibertyCellPortIterator pin_iter(lib_cell);
+  sta::LibertyPort* found = nullptr;
   while (pin_iter.hasNext()) {
     sta::LibertyPort* port = pin_iter.next();
     const char* port_name = port->name();
     for (const char* candidate :
          {"SE", "SCE", "SCAN_EN", "SCAN_ENABLE", "SCANENABLE"}) {
-      if (equals_ignore_case(port_name, candidate)) {
+      if (matches_prefix_or_exact_ignore_case(port_name, candidate)) {
         if (port->scanSignalType() == sta::ScanSignalType::none) {
           port->setScanSignalType(sta::ScanSignalType::enable);
         }
-        return port;
+        if (found == nullptr) {
+          found = port;
+        }
+        break;
       }
     }
   }
-  return nullptr;
+  return found;
 }
 
 sta::LibertyPort* getLibertyScanIn(const sta::LibertyCell* lib_cell)
@@ -1177,22 +1211,56 @@ sta::LibertyPort* getLibertyScanIn(const sta::LibertyCell* lib_cell)
     return *lhs == '\0' && *rhs == '\0';
   };
 
+  auto matches_prefix_or_exact_ignore_case =
+      [&](const char* name, const char* prefix) -> bool {
+    if (equals_ignore_case(name, prefix)) {
+      return true;
+    }
+    if (name == nullptr || prefix == nullptr) {
+      return false;
+    }
+    const std::size_t n = std::strlen(name);
+    const std::size_t p = std::strlen(prefix);
+    if (n <= p) {
+      return false;
+    }
+    for (std::size_t i = 0; i < p; ++i) {
+      if (std::tolower(static_cast<unsigned char>(name[i]))
+          != std::tolower(static_cast<unsigned char>(prefix[i]))) {
+        return false;
+      }
+    }
+    const char next = name[p];
+    if (std::isdigit(static_cast<unsigned char>(next)) || next == '[') {
+      return true;
+    }
+    if (next == '_' && (p + 1) < n
+        && std::isdigit(static_cast<unsigned char>(name[p + 1]))) {
+      return true;
+    }
+    return false;
+  };
+
   // Fallback for libraries that do not tag scan pins via Liberty signal_type.
   // Common pin names include SI/SCD/SCAN_IN/SCANIN.
   sta::LibertyCellPortIterator pin_iter(lib_cell);
+  sta::LibertyPort* found = nullptr;
   while (pin_iter.hasNext()) {
     sta::LibertyPort* port = pin_iter.next();
     const char* port_name = port->name();
     for (const char* candidate : {"SI", "SCD", "SCAN_IN", "SCANIN"}) {
-      if (equals_ignore_case(port_name, candidate)) {
+      if (matches_prefix_or_exact_ignore_case(port_name, candidate)) {
         if (port->scanSignalType() == sta::ScanSignalType::none) {
           port->setScanSignalType(sta::ScanSignalType::input);
         }
-        return port;
+        if (found == nullptr) {
+          found = port;
+        }
+        break;
       }
     }
   }
-  return nullptr;
+  return found;
 }
 
 sta::LibertyPort* getLibertyScanOut(const sta::LibertyCell* lib_cell)
@@ -1222,22 +1290,56 @@ sta::LibertyPort* getLibertyScanOut(const sta::LibertyCell* lib_cell)
     return *lhs == '\0' && *rhs == '\0';
   };
 
+  auto matches_prefix_or_exact_ignore_case =
+      [&](const char* name, const char* prefix) -> bool {
+    if (equals_ignore_case(name, prefix)) {
+      return true;
+    }
+    if (name == nullptr || prefix == nullptr) {
+      return false;
+    }
+    const std::size_t n = std::strlen(name);
+    const std::size_t p = std::strlen(prefix);
+    if (n <= p) {
+      return false;
+    }
+    for (std::size_t i = 0; i < p; ++i) {
+      if (std::tolower(static_cast<unsigned char>(name[i]))
+          != std::tolower(static_cast<unsigned char>(prefix[i]))) {
+        return false;
+      }
+    }
+    const char next = name[p];
+    if (std::isdigit(static_cast<unsigned char>(next)) || next == '[') {
+      return true;
+    }
+    if (next == '_' && (p + 1) < n
+        && std::isdigit(static_cast<unsigned char>(name[p + 1]))) {
+      return true;
+    }
+    return false;
+  };
+
   // Fallback for libraries that do not tag scan pins via Liberty signal_type.
   // Many scan flops use Q as the scan out, but some expose an explicit SO/SCO.
   sta::LibertyCellPortIterator pin_iter(lib_cell);
+  sta::LibertyPort* found = nullptr;
   while (pin_iter.hasNext()) {
     sta::LibertyPort* port = pin_iter.next();
     const char* port_name = port->name();
     for (const char* candidate : {"SO", "SCO", "SCAN_OUT", "SCANOUT"}) {
-      if (equals_ignore_case(port_name, candidate)) {
+      if (matches_prefix_or_exact_ignore_case(port_name, candidate)) {
         if (port->scanSignalType() == sta::ScanSignalType::none) {
           port->setScanSignalType(sta::ScanSignalType::output);
         }
-        return port;
+        if (found == nullptr) {
+          found = port;
+        }
+        break;
       }
     }
   }
-  return nullptr;
+  return found;
 }
 
 }  // namespace sta

@@ -1,0 +1,9 @@
+[INFO ODB-0227] LEF file: sky130hd/sky130hd.tlef, created 13 layers, 25 vias
+[INFO ODB-0227] LEF file: sky130hd/sky130_fd_sc_hd_merged.lef, created 437 library cells
+[WARNING DFT-0212] Scan constraints: endpoint port 'scan_in_0' not found; ignoring endpoint.
+[WARNING DFT-0212] Scan constraints: endpoint port 'scan_out_0' not found; ignoring endpoint.
+[WARNING DFT-0226] Scan chain 'chain_0' scan-in port 'scan_in_0' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
+[WARNING DFT-0230] Scan chain 'chain_0' scan-out port 'scan_out_0' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
+[INFO DFT-0289] Scan enable buffering complete at level 2 (fanout=2).
+[INFO DFT-0293] Inserted 6 buffer(s) for scan_enable (max_fanout=3, levels=3).
+buffer_scan_enable inserted=6

@@ -498,6 +498,36 @@ std::optional<ScanArchitectConfig::ChainEndpoints> ScanArchitectConfig::getChain
   return it->second;
 }
 
+void ScanArchitectConfig::setUseExistingScanChains(bool enable)
+{
+  use_existing_scan_chains_ = enable;
+}
+
+bool ScanArchitectConfig::getUseExistingScanChains() const
+{
+  return use_existing_scan_chains_;
+}
+
+void ScanArchitectConfig::setSplitMultibitScanCells(bool enable)
+{
+  split_multibit_scan_cells_ = enable;
+}
+
+bool ScanArchitectConfig::getSplitMultibitScanCells() const
+{
+  return split_multibit_scan_cells_;
+}
+
+void ScanArchitectConfig::setErrorOnPowerDomainCrossings(bool enable)
+{
+  error_on_power_domain_crossings_ = enable;
+}
+
+bool ScanArchitectConfig::getErrorOnPowerDomainCrossings() const
+{
+  return error_on_power_domain_crossings_;
+}
+
 const std::vector<std::string>& ScanArchitectConfig::getChainNames() const
 {
   return chain_names_;
@@ -1254,13 +1284,20 @@ void ScanArchitectConfig::report(utl::Logger* logger) const
     logger->report("- Timing Hold Weight: {:.3f}", timing_weight_hold_);
     logger->report("- Timing Critical Slack: {:.3f}", timing_critical_slack_);
   }
-  if (scan_order_solver_ == ScanOrderSolver::ScanOpt) {
+  if (scan_order_solver_ != ScanOrderSolver::Heuristic) {
+    // Scan-order solver tuning knobs. These are shared across solver backends, but
+    // some knobs are only honored by the in-tree `ILS` solver.
     logger->report("- ScanOpt Rounds: {}", scanopt_rounds_);
     logger->report("- ScanOpt Seed: {}", scanopt_seed_);
     logger->report("- ScanOpt Temp Control: {}", scanopt_temp_control_);
-    logger->report("- ScanOpt TDiv: {:.3f}", scanopt_t_div_);
+    const char* ils_only = (scan_order_solver_ == ScanOrderSolver::UclaScanOpt)
+                               ? " (ILS only)"
+                               : "";
+    logger->report("- ScanOpt TDiv: {:.3f}{}", scanopt_t_div_, ils_only);
     if (scanopt_time_limit_seconds_ > 0.0) {
-      logger->report("- ScanOpt Time Limit: {:.3f}s", scanopt_time_limit_seconds_);
+      logger->report("- ScanOpt Time Limit: {:.3f}s{}",
+                     scanopt_time_limit_seconds_,
+                     ils_only);
     }
   }
   if (!scan_order_groups_.empty() || !scan_order_fixed_edges_.empty()) {
@@ -1284,6 +1321,15 @@ void ScanArchitectConfig::report(utl::Logger* logger) const
   }
   if (prefer_qbar_scan_out_) {
     logger->report("- Prefer Qbar Scan Out: yes");
+  }
+  if (use_existing_scan_chains_) {
+    logger->report("- Use Existing Scan Chains (ODB): yes");
+  }
+  if (split_multibit_scan_cells_) {
+    logger->report("- Split Multibit Scan Cells: yes");
+  }
+  if (error_on_power_domain_crossings_) {
+    logger->report("- Power Domain Crossings: error");
   }
   if (!auto_excluded_instances_.empty()) {
     logger->report("- Auto Excluded Instances: {}", auto_excluded_instances_.size());
@@ -1347,9 +1393,9 @@ std::string ScanArchitectConfig::ScanOrderSolverName(
     case ScanArchitectConfig::ScanOrderSolver::Heuristic:
       return "Heuristic";
     case ScanArchitectConfig::ScanOrderSolver::ScanOpt:
-      return "ScanOpt";
+      return "ILS";
     case ScanArchitectConfig::ScanOrderSolver::UclaScanOpt:
-      return "UCLA ScanOpt";
+      return "ScanOpt";
     default:
       return "Missing case in ScanOrderSolverName";
   }

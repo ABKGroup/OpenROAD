@@ -3,6 +3,7 @@
 
 #include "OneBitScanCell.hh"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -18,6 +19,7 @@ namespace dft {
 
 OneBitScanCell::OneBitScanCell(const std::string& name,
                                std::unique_ptr<ClockDomain> clock_domain,
+                               uint64_t bits,
                                odb::dbInst* inst,
                                sta::LibertyPort* scan_in_port,
                                sta::LibertyPort* scan_enable_port,
@@ -26,6 +28,7 @@ OneBitScanCell::OneBitScanCell(const std::string& name,
                                utl::Logger* logger)
     : ScanCell(name, std::move(clock_domain), logger),
       inst_(inst),
+      bits_(std::max<uint64_t>(1, bits)),
       scan_in_port_(scan_in_port),
       scan_enable_port_(scan_enable_port),
       scan_out_port_(scan_out_port),
@@ -35,7 +38,7 @@ OneBitScanCell::OneBitScanCell(const std::string& name,
 
 uint64_t OneBitScanCell::getBits() const
 {
-  return 1;
+  return bits_;
 }
 
 void OneBitScanCell::connectScanEnable(const ScanDriver& driver) const
@@ -74,6 +77,11 @@ ScanDriver OneBitScanCell::getScanOut() const
 ScanLoad OneBitScanCell::getScanIn() const
 {
   return ScanLoad(findITerm(scan_in_port_));
+}
+
+odb::dbInst* OneBitScanCell::getDbInst() const
+{
+  return inst_;
 }
 
 odb::dbITerm* OneBitScanCell::findITerm(sta::LibertyPort* liberty_port) const

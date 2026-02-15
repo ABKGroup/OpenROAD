@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -18,6 +19,7 @@
 #include <vector>
 
 #include "ClockDomain.hh"
+#include "DbScanCell.hh"
 #include "DftConfig.hh"
 #include "ScanArchitect.hh"
 #include "ScanArchitectConfig.hh"
@@ -30,8 +32,11 @@
 #include "db_sta/dbNetwork.hh"
 #include "db_sta/dbSta.hh"
 #include "odb/db.h"
+#include "sta/Clock.hh"
+#include "sta/FuncExpr.hh"
 #include "sta/Liberty.hh"
 #include "sta/PortDirection.hh"
+#include "sta/Sequential.hh"
 #include "utl/Logger.h"
 
 namespace {
@@ -44,6 +49,132 @@ sta::LibertyCell* getLibertyCell(odb::dbInst* inst, sta::dbNetwork* db_network)
   }
   sta::Cell* master_cell = db_network->dbToSta(inst->getMaster());
   return master_cell != nullptr ? db_network->libertyCell(master_cell) : nullptr;
+}
+
+bool termIsNull(const std::variant<odb::dbBTerm*, odb::dbITerm*>& term)
+{
+  bool is_null = true;
+  std::visit([&](auto&& t) { is_null = (t == nullptr); }, term);
+  return is_null;
+}
+
+std::optional<std::pair<float, float>> computeScanOutTimingSlacks(
+    const dft::ScanCell& cell,
+    sta::dbSta* sta)
+{
+  if (sta == nullptr) {
+    return std::nullopt;
+  }
+
+  sta::dbNetwork* db_network = sta->getDbNetwork();
+  if (db_network == nullptr) {
+    return std::nullopt;
+  }
+
+  sta::Pin* pin = nullptr;
+  const dft::ScanDriver scan_out = cell.getScanOut();
+  std::visit(
+      [&](auto&& term) {
+        if (term != nullptr) {
+          pin = db_network->dbToSta(term);
+        }
+      },
+      scan_out.getValue());
+  if (pin == nullptr) {
+    return std::nullopt;
+  }
+
+  const float setup_rise
+      = sta->pinSlack(pin, sta::RiseFall::rise(), sta::MinMax::max());
+  const float setup_fall
+      = sta->pinSlack(pin, sta::RiseFall::fall(), sta::MinMax::max());
+  const float hold_rise
+      = sta->pinSlack(pin, sta::RiseFall::rise(), sta::MinMax::min());
+  const float hold_fall
+      = sta->pinSlack(pin, sta::RiseFall::fall(), sta::MinMax::min());
+
+  const float setup = std::min(setup_rise, setup_fall);
+  const float hold = std::min(hold_rise, hold_fall);
+
+  if (setup >= sta::INF / 2.0F && hold >= sta::INF / 2.0F) {
+    return std::nullopt;
+  }
+
+  return std::make_pair(setup, hold);
+}
+
+dft::ClockEdge inferClockEdgeFromLiberty(odb::dbInst* inst,
+                                         sta::dbNetwork* db_network)
+{
+  if (inst == nullptr || db_network == nullptr) {
+    return dft::ClockEdge::Rising;
+  }
+
+  sta::LibertyCell* liberty_cell = getLibertyCell(inst, db_network);
+  if (liberty_cell == nullptr) {
+    return dft::ClockEdge::Rising;
+  }
+
+  const sta::SequentialSeq& sequentials = liberty_cell->sequentials();
+  for (const sta::Sequential* sequential : sequentials) {
+    if (sequential == nullptr) {
+      continue;
+    }
+    sta::FuncExpr* clk = sequential->clock();
+    if (clk != nullptr && clk->op() == sta::FuncExpr::op_not) {
+      return dft::ClockEdge::Falling;
+    }
+    // Fallback to the legacy check.
+    if (clk != nullptr && clk->left() != nullptr && clk->right() == nullptr) {
+      return dft::ClockEdge::Falling;
+    }
+    return dft::ClockEdge::Rising;
+  }
+
+  return dft::ClockEdge::Rising;
+}
+
+std::string inferClockNameFromSta(odb::dbInst* inst, sta::dbSta* sta)
+{
+  if (inst == nullptr || sta == nullptr) {
+    return "unknown_clock";
+  }
+
+  const std::vector<odb::dbITerm*> clocks = dft::utils::GetClockPin(inst);
+  if (!clocks.empty() && clocks.front() != nullptr) {
+    if (auto clk = dft::utils::GetClock(sta, clocks.front()); clk.has_value()) {
+      return std::string((*clk)->name());
+    }
+    if (odb::dbNet* net = clocks.front()->getNet()) {
+      return std::string(net->getName());
+    }
+  }
+
+  return "unknown_clock";
+}
+
+odb::dbITerm* inferScanEnableITerm(odb::dbInst* inst, sta::dbSta* sta)
+{
+  if (inst == nullptr || sta == nullptr) {
+    return nullptr;
+  }
+
+  sta::dbNetwork* db_network = sta->getDbNetwork();
+  if (db_network == nullptr) {
+    return nullptr;
+  }
+
+  sta::LibertyCell* liberty_cell = getLibertyCell(inst, db_network);
+  if (liberty_cell == nullptr) {
+    return nullptr;
+  }
+
+  sta::LibertyPort* se_port = sta::getLibertyScanEnable(liberty_cell);
+  if (se_port == nullptr || se_port->name() == nullptr) {
+    return nullptr;
+  }
+
+  return inst->findITerm(se_port->name());
 }
 
 bool isClockGateInstance(odb::dbInst* inst, sta::dbNetwork* db_network)
@@ -138,7 +269,7 @@ void warnSpecialCells(odb::dbDatabase* db,
       if (!cell) {
         continue;
       }
-      odb::dbInst* inst = block->findInst(std::string(cell->getName()).c_str());
+      odb::dbInst* inst = cell->getDbInst();
       if (inst == nullptr) {
         continue;
       }
@@ -299,6 +430,7 @@ void collectGroupInstsRec(odb::dbGroup* group,
 
 void warnPowerDomainCrossings(odb::dbDatabase* db,
                               utl::Logger* logger,
+                              const dft::ScanArchitectConfig& config,
                               const std::vector<std::unique_ptr<dft::ScanChain>>& chains)
 {
   if (db == nullptr || logger == nullptr) {
@@ -328,6 +460,15 @@ void warnPowerDomainCrossings(odb::dbDatabase* db,
     return;
   }
 
+  const bool fatal = config.getErrorOnPowerDomainCrossings();
+  auto warnOrError = [&](int code, const char* msg, auto&&... args) {
+    if (fatal) {
+      logger->error(utl::DFT, code, msg, std::forward<decltype(args)>(args)...);
+    } else {
+      logger->warn(utl::DFT, code, msg, std::forward<decltype(args)>(args)...);
+    }
+  };
+
   int voltage_crossings = 0;
   int switched_crossings = 0;
   int unknown_crossings = 0;
@@ -354,10 +495,8 @@ void warnPowerDomainCrossings(odb::dbDatabase* db,
         continue;
       }
 
-      odb::dbInst* from_inst
-          = block->findInst(std::string(prev_cell->getName()).c_str());
-      odb::dbInst* to_inst
-          = block->findInst(std::string(next_cell->getName()).c_str());
+      odb::dbInst* from_inst = prev_cell->getDbInst();
+      odb::dbInst* to_inst = next_cell->getDbInst();
       if (from_inst == nullptr || to_inst == nullptr) {
         continue;
       }
@@ -408,28 +547,25 @@ void warnPowerDomainCrossings(odb::dbDatabase* db,
   }
 
   if (unknown_crossings > 0) {
-    logger->warn(utl::DFT,
-                 261,
-                 "Scan chains include {} crossing(s) between different power "
-                 "domains, but power-domain assignments are incomplete; cannot "
-                 "validate level shifter/isolation requirements.",
-                 unknown_crossings);
+    warnOrError(261,
+                "Scan chains include {} crossing(s) between different power "
+                "domains, but power-domain assignments are incomplete; cannot "
+                "validate level shifter/isolation requirements.",
+                unknown_crossings);
   }
 
   if (voltage_crossings > 0) {
-    logger->warn(utl::DFT,
-                 262,
-                 "Scan chains include {} crossing(s) between power domains at "
-                 "different voltages; level shifters may be required.",
-                 voltage_crossings);
+    warnOrError(262,
+                "Scan chains include {} crossing(s) between power domains at "
+                "different voltages; level shifters may be required.",
+                voltage_crossings);
   }
 
   if (switched_crossings > 0) {
-    logger->warn(utl::DFT,
-                 263,
-                 "Scan chains include {} crossing(s) where at least one power "
-                 "domain is switched; isolation may be required.",
-                 switched_crossings);
+    warnOrError(263,
+                "Scan chains include {} crossing(s) where at least one power "
+                "domain is switched; isolation may be required.",
+                switched_crossings);
   }
 
   if (!examples.empty()) {
@@ -499,7 +635,7 @@ void Dft::reportDftPlan(bool verbose)
   for (const auto& scan_chain : scan_chains) {
     scan_chain->report(logger_, verbose);
   }
-  warnPowerDomainCrossings(db_, logger_, scan_chains);
+  warnPowerDomainCrossings(db_, logger_, dft_config_->getScanArchitectConfig(), scan_chains);
   warnSpecialCells(db_, sta_, logger_, scan_chains, /*post_stitch=*/false);
   logger_->report("");
 }
@@ -570,9 +706,11 @@ void Dft::executeDftPlan()
   if (need_to_run_pre_dft_) {
     pre_dft();
   }
+  const bool use_existing_scan_chains
+      = dft_config_->getScanArchitectConfig().getUseExistingScanChains();
   std::vector<std::unique_ptr<ScanChain>> scan_chains = scanArchitect();
 
-  warnPowerDomainCrossings(db_, logger_, scan_chains);
+  warnPowerDomainCrossings(db_, logger_, dft_config_->getScanArchitectConfig(), scan_chains);
   warnSpecialCells(db_, sta_, logger_, scan_chains, /*post_stitch=*/false);
 
   ScanStitch stitch(db_,
@@ -583,6 +721,33 @@ void Dft::executeDftPlan()
 
   // Post-stitch: scan_enable nets exist; re-run checks with more context.
   warnSpecialCells(db_, sta_, logger_, scan_chains, /*post_stitch=*/true);
+
+  if (use_existing_scan_chains) {
+    // We stitched using scan chains already present in ODB; avoid creating
+    // duplicate ODB scan chains. Update scan_enable on the existing chains so
+    // follow-on utilities (e.g. buffer_scan_enable) can find it.
+    odb::dbBlock* db_block = db_->getChip()->getBlock();
+    odb::dbDft* db_dft = db_block->getDft();
+    if (db_dft != nullptr) {
+      std::optional<ScanDriver> enable;
+      for (const auto& chain : scan_chains) {
+        if (chain != nullptr && chain->getScanEnable().has_value()) {
+          enable = chain->getScanEnable();
+          break;
+        }
+      }
+      if (enable.has_value()) {
+        for (odb::dbScanChain* db_sc : db_dft->getScanChains()) {
+          if (db_sc == nullptr) {
+            continue;
+          }
+          std::visit([&](auto&& term) { db_sc->setScanEnable(term); },
+                     enable->getValue());
+        }
+      }
+    }
+    return;
+  }
 
   // Write scan chains to odb
   odb::dbBlock* db_block = db_->getChip()->getBlock();
@@ -596,8 +761,13 @@ void Dft::executeDftPlan()
     odb::dbScanList* db_scanlist = odb::dbScanList::create(db_part);
 
     for (const auto& scan_cell : chain->getScanCells()) {
-      std::string inst_name(scan_cell->getName());
-      odb::dbInst* db_inst = db_block->findInst(inst_name.c_str());
+      odb::dbInst* db_inst = scan_cell->getDbInst();
+      if (db_inst == nullptr) {
+        logger_->error(utl::DFT,
+                       316,
+                       "Scan stitch internal error: null dbInst for scan cell '{}'",
+                       scan_cell->getName());
+      }
       odb::dbScanInst* db_scaninst = db_scanlist->add(db_inst);
       db_scaninst->setBits(scan_cell->getBits());
       ScanLoad scan_enable = scan_cell->getScanEnable();
@@ -1019,9 +1189,335 @@ void Dft::reportDftConfig() const
   dft_config_->report(logger_);
 }
 
+std::vector<std::unique_ptr<ScanChain>> Dft::scanArchitectFromDb()
+{
+  if (db_ == nullptr) {
+    logger_->error(utl::DFT, 301, "No database available.");
+  }
+
+  odb::dbChip* chip = db_->getChip();
+  if (chip == nullptr || chip->getBlock() == nullptr) {
+    logger_->error(utl::DFT, 302, "No design block found.");
+  }
+
+  odb::dbBlock* block = chip->getBlock();
+  odb::dbDft* db_dft = block->getDft();
+  if (db_dft == nullptr) {
+    logger_->error(utl::DFT, 303, "No DFT object found in the database.");
+  }
+
+  std::vector<odb::dbScanChain*> db_chains;
+  for (odb::dbScanChain* chain : db_dft->getScanChains()) {
+    if (chain != nullptr) {
+      db_chains.push_back(chain);
+    }
+  }
+  if (db_chains.empty()) {
+    logger_->error(
+        utl::DFT,
+        304,
+        "No scan chains found in the database (import a SCANDEF with "
+        "`read_def -incremental` or run execute_dft_plan first).");
+  }
+
+  std::sort(db_chains.begin(),
+            db_chains.end(),
+            [](const odb::dbScanChain* a, const odb::dbScanChain* b) {
+              return a->getName() < b->getName();
+            });
+
+  const ScanArchitectConfig& config = dft_config_->getScanArchitectConfig();
+  const ScanStitchConfig& stitch_cfg = dft_config_->getScanStitchConfig();
+  const bool compute_timing_slacks
+      = (config.getTimingWeightSetup() != 0.0 || config.getTimingWeightHold() != 0.0
+         || !stitch_cfg.getTimingBufferCell().empty());
+
+  sta::dbNetwork* db_network = sta_ != nullptr ? sta_->getDbNetwork() : nullptr;
+
+  std::vector<std::unique_ptr<ScanChain>> scan_chains;
+  for (odb::dbScanChain* db_chain : db_chains) {
+    if (db_chain == nullptr) {
+      continue;
+    }
+
+    odb::dbSet<odb::dbScanPartition> parts = db_chain->getScanPartitions();
+    int chain_suffix = 0;
+    for (odb::dbScanPartition* part : parts) {
+      if (part == nullptr) {
+        continue;
+      }
+
+      const std::string chain_name
+          = parts.size() == 1
+                ? db_chain->getName()
+                : db_chain->getName() + "_" + std::to_string(chain_suffix);
+
+      auto chain = std::make_unique<ScanChain>(chain_name);
+
+      // Seed endpoints from ODB if present; ScanStitch will reuse these rather
+      // than formatting name patterns.
+      if (!termIsNull(db_chain->getScanIn())) {
+        chain->setScanIn(ScanDriver(db_chain->getScanIn()));
+      }
+      if (!termIsNull(db_chain->getScanOut())) {
+        chain->setScanOut(ScanLoad(db_chain->getScanOut()));
+      }
+      if (!termIsNull(db_chain->getScanEnable())) {
+        chain->setScanEnable(ScanDriver(db_chain->getScanEnable()));
+      }
+
+      for (odb::dbScanList* scan_list : part->getScanLists()) {
+        if (scan_list == nullptr) {
+          continue;
+        }
+
+        for (odb::dbScanInst* scan_inst : scan_list->getScanInsts()) {
+          if (scan_inst == nullptr) {
+            continue;
+          }
+
+          odb::dbInst* inst = scan_inst->getInst();
+          if (inst == nullptr) {
+            logger_->error(utl::DFT,
+                           305,
+                           "ODB scan chain '{}' contains a null scan instance.",
+                           chain_name);
+          }
+          if (config.isInstanceExcluded(inst->getName(),
+                                        inst->getMaster()->getName())) {
+            logger_->error(
+                utl::DFT,
+                306,
+                "ODB scan chain '{}' contains excluded instance '{}' (master '{}').",
+                chain_name,
+                inst->getName(),
+                inst->getMaster()->getName());
+          }
+
+          const odb::dbScanInst::AccessPins pins = scan_inst->getAccessPins();
+          if (termIsNull(pins.scan_in) || termIsNull(pins.scan_out)) {
+            logger_->error(
+                utl::DFT,
+                307,
+                "ODB scan chain '{}' missing scan access pins for instance '{}'.",
+                chain_name,
+                inst->getName());
+          }
+
+          ScanLoad scan_in(pins.scan_in);
+          ScanDriver scan_out(pins.scan_out);
+
+          bool has_scan_enable = false;
+          ScanLoad scan_enable = [&]() -> ScanLoad {
+            auto se_term = scan_inst->getScanEnable();
+            if (!termIsNull(se_term)) {
+              has_scan_enable = true;
+              return ScanLoad(se_term);
+            }
+            if (odb::dbITerm* iterm = inferScanEnableITerm(inst, sta_)) {
+              has_scan_enable = true;
+              return ScanLoad(iterm);
+            }
+            return scan_in;  // placeholder; connectScanEnable() will be a no-op.
+          }();
+
+          std::string clock_name = scan_inst->getScanClock();
+          if (clock_name.empty()) {
+            clock_name = inferClockNameFromSta(inst, sta_);
+          }
+          const ClockEdge edge = inferClockEdgeFromLiberty(inst, db_network);
+          auto clock_domain = std::make_unique<ClockDomain>(clock_name, edge);
+
+          uint64_t bits = scan_inst->getBits();
+          if (bits <= 1 && db_network != nullptr) {
+            // SCANDEF import defaults sequential elements to 1 bit. For MBFFs,
+            // infer a better bit count from Liberty when possible. Keep 0 for
+            // stateless components.
+            if (sta::LibertyCell* liberty_cell = getLibertyCell(inst, db_network);
+                liberty_cell != nullptr && liberty_cell->hasSequentials()
+                && sta::getLibertyScanIn(liberty_cell) != nullptr
+                && sta::getLibertyScanEnable(liberty_cell) != nullptr) {
+              const sta::SequentialSeq& sequentials = liberty_cell->sequentials();
+              uint64_t inferred = 0;
+              for (const sta::Sequential* seq : sequentials) {
+                if (seq != nullptr && seq->isRegister()) {
+                  inferred += 1;
+                }
+              }
+              if (inferred > bits) {
+                bits = inferred;
+              }
+            }
+          }
+          auto cell = std::make_unique<DbScanCell>(inst->getName(),
+                                                   std::move(clock_domain),
+                                                   inst,
+                                                   scan_in,
+                                                   scan_enable,
+                                                   scan_out,
+                                                   bits,
+                                                   has_scan_enable,
+                                                   logger_);
+
+          if (compute_timing_slacks) {
+            if (auto slacks = computeScanOutTimingSlacks(*cell, sta_)) {
+              cell->setTimingSlacks(slacks->first, slacks->second);
+            }
+          }
+
+          chain->addOrdered(std::move(cell));
+        }
+      }
+
+      scan_chains.push_back(std::move(chain));
+      ++chain_suffix;
+    }
+  }
+
+  // Enforce structural constraints against the imported chains.
+  if (config.getChainCount().has_value()
+      && scan_chains.size() != config.getChainCount().value()) {
+    logger_->error(utl::DFT,
+                   308,
+                   "Use-existing-scan-chains mode: chain_count={} but ODB has {} "
+                   "scan chain(s).",
+                   config.getChainCount().value(),
+                   scan_chains.size());
+  }
+  if (config.getMaxChains().has_value()
+      && scan_chains.size() > config.getMaxChains().value()) {
+    logger_->error(utl::DFT,
+                   309,
+                   "Use-existing-scan-chains mode: max_chains={} but ODB has {} "
+                   "scan chain(s).",
+                   config.getMaxChains().value(),
+                   scan_chains.size());
+  }
+  if (config.getMaxLength().has_value()) {
+    const uint64_t max_len = config.getMaxLength().value();
+    for (const auto& chain : scan_chains) {
+      if (chain != nullptr && chain->getBits() > max_len) {
+        logger_->error(
+            utl::DFT,
+            310,
+            "Use-existing-scan-chains mode: chain '{}' has {} bits which "
+            "exceeds max_length={}.",
+            chain->getName(),
+            chain->getBits(),
+            max_len);
+      }
+    }
+  }
+  {
+    const double allowed_ratio
+        = 1.0 + (std::max(0.0, config.getMaxImbalancePercent()) / 100.0);
+    uint64_t min_bits = std::numeric_limits<uint64_t>::max();
+    uint64_t max_bits = 0;
+    for (const auto& chain : scan_chains) {
+      if (chain == nullptr) {
+        continue;
+      }
+      const uint64_t bits = chain->getBits();
+      if (bits == 0) {
+        continue;
+      }
+      min_bits = std::min(min_bits, bits);
+      max_bits = std::max(max_bits, bits);
+    }
+    if (min_bits != std::numeric_limits<uint64_t>::max()) {
+      const double ratio
+          = static_cast<double>(max_bits) / static_cast<double>(min_bits);
+      if (ratio > allowed_ratio + 1e-12) {
+        logger_->error(
+            utl::DFT,
+            311,
+            "Use-existing-scan-chains mode: max_imbalance={:.1f}% violated across "
+            "ODB scan chains (min_bits={}, max_bits={}, ratio={:.3f}).",
+            config.getMaxImbalancePercent(),
+            min_bits,
+            max_bits,
+            ratio);
+      }
+    }
+  }
+
+  // Enforce clock/polarity constraints.
+  for (const auto& chain : scan_chains) {
+    if (chain == nullptr) {
+      continue;
+    }
+    const auto& cells = chain->getScanCells();
+    if (cells.empty()) {
+      continue;
+    }
+
+    std::optional<std::string_view> first_clock;
+    std::optional<ClockEdge> first_edge;
+    bool saw_rising = false;
+
+    for (const auto& cell : cells) {
+      if (cell == nullptr) {
+        continue;
+      }
+      if (cell->getBits() == 0) {
+        continue;  // stateless components do not participate in domain/polarity constraints
+      }
+      const ClockDomain& cd = cell->getClockDomain();
+      if (!first_clock.has_value()) {
+        first_clock = cd.getClockName();
+      }
+      if (!first_edge.has_value()) {
+        first_edge = cd.getClockEdge();
+      }
+
+      if (config.getClockMixing() == ScanArchitectConfig::ClockMixing::NoMix
+          && first_clock.has_value() && cd.getClockName() != first_clock.value()) {
+        logger_->error(
+            utl::DFT,
+            312,
+            "Use-existing-scan-chains mode: chain '{}' mixes clocks ('{}' vs '{}') "
+            "but clock_mixing=NoMix.",
+            chain->getName(),
+            first_clock.value(),
+            cd.getClockName());
+      }
+
+      if (config.getPolarityMode() == ScanArchitectConfig::PolarityMode::Strict
+          && first_edge.has_value() && cd.getClockEdge() != first_edge.value()) {
+        logger_->error(
+            utl::DFT,
+            313,
+            "Use-existing-scan-chains mode: chain '{}' mixes polarities but "
+            "polarity_mode=Strict.",
+            chain->getName());
+      }
+
+      if (config.getPolarityMode() == ScanArchitectConfig::PolarityMode::Mid) {
+        if (cd.getClockEdge() == ClockEdge::Rising) {
+          saw_rising = true;
+        } else if (saw_rising) {
+          logger_->error(
+              utl::DFT,
+              314,
+              "Use-existing-scan-chains mode: chain '{}' violates polarity_mode=Mid "
+              "(found falling-edge cell after a rising-edge cell).",
+              chain->getName());
+        }
+      }
+    }
+  }
+
+  return scan_chains;
+}
+
 std::vector<std::unique_ptr<ScanChain>> Dft::scanArchitect()
 {
   applyAutoExclusions();
+
+  if (dft_config_->getScanArchitectConfig().getUseExistingScanChains()) {
+    return scanArchitectFromDb();
+  }
+
   std::vector<std::unique_ptr<ScanCell>> scan_cells
       = CollectScanCells(db_, sta_, dft_config_->getScanArchitectConfig(), logger_);
 

@@ -4,9 +4,11 @@
 #include "UclaScanOpt.hh"
 
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 
+#include <ABKCommon/abkseed.h>
 #include <ScanOpt/optimizer1.h>
 
 namespace dft {
@@ -57,6 +59,32 @@ unsigned clampToUnsigned(uint64_t v)
 {
   return static_cast<unsigned>(
       std::min<uint64_t>(v, std::numeric_limits<unsigned>::max()));
+}
+
+unsigned clampToDeterministicSeed(uint64_t v)
+{
+  const unsigned s = clampToUnsigned(v);
+  // ABKCommon uses UINT_MAX as the sentinel for "no explicit seed".
+  if (s == std::numeric_limits<unsigned>::max()) {
+    return std::numeric_limits<unsigned>::max() - 1;
+  }
+  return s;
+}
+
+void configureSeedHandlerOnce(uint64_t seed)
+{
+  static std::once_flag seed_once;
+  std::call_once(seed_once, [seed]() {
+    // UCLApack's ABKCommon SeedHandler writes a `seeds.out` lock/log file in the
+    // CWD by default. Disable that so embedded use (and parallel runs) don't
+    // create/contend on a global file.
+    SeedHandler::turnOffLogging();
+
+    // Force a deterministic external seed so any ABKCommon RNGs created without
+    // an explicit seed (or using multipartite locIdent seeds) remain
+    // deterministic across runs.
+    SeedHandler::overrideExternalSeed(clampToDeterministicSeed(seed));
+  });
 }
 
 }  // namespace
@@ -118,7 +146,8 @@ std::vector<std::size_t> UclaScanOptOrder(
 
   FlatScanChain chain(cells, begin_idx, end_idx);
 
-  RandomRawUnsigned randuns(clampToUnsigned(params.seed));
+  configureSeedHandlerOnce(params.seed);
+  RandomRawUnsigned randuns(clampToDeterministicSeed(params.seed));
 
   abkscanopt::Optimizer::Params p;
   p.majorLoops = clampToUnsigned(params.major_loops);

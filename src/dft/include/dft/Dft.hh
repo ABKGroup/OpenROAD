@@ -124,6 +124,10 @@ class Dft
   // report_dft_plan and execute_dft_plan
   std::vector<std::unique_ptr<ScanChain>> scanArchitect();
 
+  // Uses scan chains already stored in ODB (e.g. imported SCANDEF) as the scan
+  // plan.
+  std::vector<std::unique_ptr<ScanChain>> scanArchitectFromDb();
+
   // Applies any enabled automatic exclusions (e.g., shift-register detection).
   void applyAutoExclusions();
 

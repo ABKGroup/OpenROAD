@@ -19,6 +19,7 @@ class ScanCellMock : public ScanCell
   ScanLoad getScanEnable() const override;
   ScanLoad getScanIn() const override;
   ScanDriver getScanOut() const override;
+  odb::dbInst* getDbInst() const override;
   odb::Point getOrigin() const override;
   bool isPlaced() const override;
 };

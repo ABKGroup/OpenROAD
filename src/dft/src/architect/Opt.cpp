@@ -440,6 +440,93 @@ std::optional<odb::Point> EndpointPoint(
 }
 }  // namespace
 
+int64_t manhattanDistUcla(const odb::Point& a, const odb::Point& b)
+{
+  const int64_t dx = std::llabs(static_cast<int64_t>(a.x()) - b.x());
+  const int64_t dy = std::llabs(static_cast<int64_t>(a.y()) - b.y());
+  return dx + dy;
+}
+
+std::size_t argMinXYSum(const std::vector<odb::Point>& pts,
+                        const std::vector<std::string_view>& names)
+{
+  std::size_t best = 0;
+  int64_t best_key = std::numeric_limits<int64_t>::max();
+  for (std::size_t i = 0; i < pts.size(); ++i) {
+    const odb::Point& p = pts[i];
+    const int64_t key
+        = static_cast<int64_t>(p.x()) + static_cast<int64_t>(p.y());
+    if (key < best_key || (key == best_key && names[i] < names[best])) {
+      best = i;
+      best_key = key;
+    }
+  }
+  return best;
+}
+
+std::size_t argMaxDist(const std::vector<odb::Point>& pts,
+                       const std::vector<std::string_view>& names,
+                       const odb::Point& from)
+{
+  std::size_t best = 0;
+  int64_t best_dist = std::numeric_limits<int64_t>::min();
+  for (std::size_t i = 0; i < pts.size(); ++i) {
+    const int64_t d = manhattanDistUcla(from, pts[i]);
+    if (d > best_dist || (d == best_dist && names[i] < names[best])) {
+      best = i;
+      best_dist = d;
+    }
+  }
+  return best;
+}
+
+odb::Point inferUclaBeginPoint(const std::vector<odb::Point>& scan_in_pts,
+                               const std::vector<std::string_view>& names,
+                               const std::optional<odb::Point>& begin,
+                               const std::optional<odb::Point>& end,
+                               const std::optional<odb::Point>& prev_out)
+{
+  if (prev_out.has_value()) {
+    return prev_out.value();
+  }
+  if (begin.has_value()) {
+    return begin.value();
+  }
+  if (end.has_value()) {
+    const std::size_t i = argMaxDist(scan_in_pts, names, end.value());
+    return scan_in_pts[i];
+  }
+  const std::size_t i = argMinXYSum(scan_in_pts, names);
+  return scan_in_pts[i];
+}
+
+odb::Point inferUclaEndPoint(const std::vector<odb::Point>& scan_out_pts,
+                             const std::vector<std::string_view>& names,
+                             const std::optional<odb::Point>& end,
+                             const odb::Point& begin)
+{
+  if (end.has_value()) {
+    return end.value();
+  }
+  const std::size_t i = argMaxDist(scan_out_pts, names, begin);
+  return scan_out_pts[i];
+}
+
+UclaScanOptParams uclaParamsFromConfig(const ScanArchitectConfig& cfg)
+{
+  UclaScanOptParams p;
+  p.seed = cfg.getScanOptSeed();
+  // Map OpenROAD ScanOpt rounds (default 500k) to UCLA majorLoops (default 100).
+  p.major_loops = std::max<uint64_t>(1, cfg.getScanOptRounds() / 5000);
+  p.n_descents = 5;
+  p.kick_move = 15;
+  p.n_near = 20;
+  p.only_2opt = false;
+  p.temp_control = cfg.getScanOptTempControl();
+  p.zero_temp = !cfg.getScanOptTempControl();
+  return p;
+}
+
 struct NetAccessGeometry
 {
   std::vector<odb::Rect> boxes;
@@ -2258,8 +2345,53 @@ void optimizeScanWirelengthWithConstraints(
     const auto seg_cost = [&](std::size_t a, std::size_t b) -> int64_t {
       return edge_cost(seg_exit[a], seg_entry[b]);
     };
-    const std::vector<std::size_t> seg_order
-        = orderNodesByCost(sn, seg_start, seg_names, config, logger, seg_cost, {});
+    std::vector<std::size_t> seg_order;
+    if (config.getScanOrderSolver()
+        == ScanArchitectConfig::ScanOrderSolver::UclaScanOpt) {
+      std::vector<odb::Point> seg_in_pts;
+      std::vector<odb::Point> seg_out_pts;
+      std::vector<std::pair<int, int>> in_pts;
+      std::vector<std::pair<int, int>> out_pts;
+      seg_in_pts.reserve(sn);
+      seg_out_pts.reserve(sn);
+      in_pts.reserve(sn);
+      out_pts.reserve(sn);
+      for (std::size_t si = 0; si < sn; ++si) {
+        const odb::Point in_p = scan_in_pts[seg_entry[si]];
+        const odb::Point out_p = scan_out_pts[seg_exit[si]];
+        seg_in_pts.push_back(in_p);
+        seg_out_pts.push_back(out_p);
+        in_pts.emplace_back(in_p.x(), in_p.y());
+        out_pts.emplace_back(out_p.x(), out_p.y());
+      }
+
+      const odb::Point u_begin = inferUclaBeginPoint(
+          seg_in_pts, seg_names, std::nullopt, std::nullopt, std::nullopt);
+      const odb::Point u_end
+          = inferUclaEndPoint(seg_out_pts, seg_names, std::nullopt, u_begin);
+
+      try {
+        seg_order = UclaScanOptOrder(
+            seg_names,
+            in_pts,
+            out_pts,
+            std::make_pair(u_begin.x(), u_begin.y()),
+            std::make_pair(u_end.x(), u_end.y()),
+            uclaParamsFromConfig(config));
+      } catch (const std::exception&) {
+        seg_order.clear();
+      }
+      if (seg_order.size() != sn) {
+        ScanArchitectConfig fallback = config;
+        fallback.setScanOrderSolver(
+            ScanArchitectConfig::ScanOrderSolver::ScanOpt);
+        seg_order = orderNodesByCost(
+            sn, seg_start, seg_names, fallback, logger, seg_cost, {});
+      }
+    } else {
+      seg_order
+          = orderNodesByCost(sn, seg_start, seg_names, config, logger, seg_cost, {});
+    }
 
     comp.ordered.clear();
     for (const std::size_t si : seg_order) {
@@ -2349,6 +2481,54 @@ void optimizeScanWirelengthWithConstraints(
       }
     }
 
+    std::optional<std::vector<std::size_t>> ucla_rank;
+    if (config.getScanOrderSolver()
+        == ScanArchitectConfig::ScanOrderSolver::UclaScanOpt) {
+      std::vector<std::string_view> comp_names;
+      std::vector<odb::Point> comp_in_pts;
+      std::vector<odb::Point> comp_out_pts;
+      std::vector<std::pair<int, int>> in_pts;
+      std::vector<std::pair<int, int>> out_pts;
+      comp_names.reserve(cn);
+      comp_in_pts.reserve(cn);
+      comp_out_pts.reserve(cn);
+      in_pts.reserve(cn);
+      out_pts.reserve(cn);
+
+      for (const auto& c : components) {
+        comp_names.push_back(c.rep);
+        const odb::Point in_p = scan_in_pts[c.entry];
+        const odb::Point out_p = scan_out_pts[c.exit];
+        comp_in_pts.push_back(in_p);
+        comp_out_pts.push_back(out_p);
+        in_pts.emplace_back(in_p.x(), in_p.y());
+        out_pts.emplace_back(out_p.x(), out_p.y());
+      }
+
+      const odb::Point u_begin
+          = inferUclaBeginPoint(comp_in_pts, comp_names, begin, end_pt, {});
+      const odb::Point u_end
+          = inferUclaEndPoint(comp_out_pts, comp_names, end_pt, u_begin);
+
+      try {
+        const std::vector<std::size_t> pref = UclaScanOptOrder(
+            comp_names,
+            in_pts,
+            out_pts,
+            std::make_pair(u_begin.x(), u_begin.y()),
+            std::make_pair(u_end.x(), u_end.y()),
+            uclaParamsFromConfig(config));
+        if (pref.size() == cn) {
+          ucla_rank = std::vector<std::size_t>(cn, 0);
+          for (std::size_t pos = 0; pos < cn; ++pos) {
+            (*ucla_rank)[pref[pos]] = pos;
+          }
+        }
+      } catch (const std::exception&) {
+        ucla_rank.reset();
+      }
+    }
+
     std::vector<char> used_comp(cn, 0);
     std::optional<std::size_t> prev_exit;
     for (std::size_t step = 0; step < cn; ++step) {
@@ -2359,6 +2539,24 @@ void optimizeScanWirelengthWithConstraints(
 
       for (std::size_t ci = 0; ci < cn; ++ci) {
         if (used_comp[ci] || indeg[ci] != 0) {
+          continue;
+        }
+
+        if (ucla_rank.has_value()) {
+          if (!found) {
+            best = ci;
+            found = true;
+            continue;
+          }
+          const std::size_t ra = (*ucla_rank)[ci];
+          const std::size_t rb = (*ucla_rank)[best];
+          if (ra < rb
+              || (ra == rb
+                  && (components[ci].priority < components[best].priority
+                      || (components[ci].priority == components[best].priority
+                          && components[ci].rep < components[best].rep)))) {
+            best = ci;
+          }
           continue;
         }
 
@@ -2482,8 +2680,70 @@ void optimizeScanWirelengthWithConstraints(
         };
       }
 
-      const std::vector<std::size_t> comp_order = orderNodesByCost(
-          cn, start_comp, comp_names, config, logger, comp_cost, terminal_cost);
+      std::vector<std::size_t> comp_order;
+      if (config.getScanOrderSolver()
+          == ScanArchitectConfig::ScanOrderSolver::UclaScanOpt) {
+        std::vector<odb::Point> comp_in_pts;
+        std::vector<odb::Point> comp_out_pts;
+        std::vector<std::pair<int, int>> in_pts;
+        std::vector<std::pair<int, int>> out_pts;
+        comp_in_pts.reserve(cn);
+        comp_out_pts.reserve(cn);
+        in_pts.reserve(cn);
+        out_pts.reserve(cn);
+        for (std::size_t off = 0; off < cn; ++off) {
+          const Component& c = components[idx + off];
+          const odb::Point in_p = scan_in_pts[c.entry];
+          const odb::Point out_p = scan_out_pts[c.exit];
+          comp_in_pts.push_back(in_p);
+          comp_out_pts.push_back(out_p);
+          in_pts.emplace_back(in_p.x(), in_p.y());
+          out_pts.emplace_back(out_p.x(), out_p.y());
+        }
+
+        std::optional<odb::Point> prev_out;
+        if (prev_exit.has_value()) {
+          prev_out = scan_out_pts[prev_exit.value()];
+        }
+
+        std::optional<odb::Point> bucket_end;
+        if (last_bucket && end_pt.has_value()) {
+          bucket_end = end_pt;
+        }
+
+        const odb::Point u_begin = inferUclaBeginPoint(
+            comp_in_pts, comp_names, begin, bucket_end, prev_out);
+        const odb::Point u_end
+            = inferUclaEndPoint(comp_out_pts, comp_names, bucket_end, u_begin);
+
+        try {
+          comp_order = UclaScanOptOrder(
+              comp_names,
+              in_pts,
+              out_pts,
+              std::make_pair(u_begin.x(), u_begin.y()),
+              std::make_pair(u_end.x(), u_end.y()),
+              uclaParamsFromConfig(config));
+        } catch (const std::exception&) {
+          comp_order.clear();
+        }
+
+        if (comp_order.size() != cn) {
+          ScanArchitectConfig fallback = config;
+          fallback.setScanOrderSolver(
+              ScanArchitectConfig::ScanOrderSolver::ScanOpt);
+          comp_order = orderNodesByCost(cn,
+                                        start_comp,
+                                        comp_names,
+                                        fallback,
+                                        logger,
+                                        comp_cost,
+                                        terminal_cost);
+        }
+      } else {
+        comp_order = orderNodesByCost(
+            cn, start_comp, comp_names, config, logger, comp_cost, terminal_cost);
+      }
 
       for (const std::size_t off : comp_order) {
         Component& c = components[idx + off];
@@ -3198,6 +3458,7 @@ void OptimizeScanWirelength(
   // map it to the in-tree ScanOpt solver.
   std::optional<ScanArchitectConfig> cfg_override;
   const ScanArchitectConfig* cfg = &config;
+  const bool has_constraints = hasScanOrderConstraints(config);
 
   // Nothing to order
   if (cells.empty()) {
@@ -3221,15 +3482,16 @@ void OptimizeScanWirelength(
       logger->warn(
           utl::DFT,
           223,
-          "UCLA_SCANOPT is only supported for placement metric; falling back "
-          "to SCANOPT for PIN_TO_NET.");
+          "SCANOPT (UCLA) is only supported for PLACEMENT; falling back to ILS "
+          "for PIN_TO_NET.");
     }
     OptimizeScanWirelengthPinToNet(cells, *cfg, logger, endpoints);
     return;
   }
 
   if (config.getScanOrderSolver()
-      == ScanArchitectConfig::ScanOrderSolver::UclaScanOpt) {
+          == ScanArchitectConfig::ScanOrderSolver::UclaScanOpt
+      && !has_constraints) {
     cfg_override = config;
     cfg_override->setScanOrderSolver(ScanArchitectConfig::ScanOrderSolver::ScanOpt);
     cfg = &cfg_override.value();
@@ -3322,69 +3584,58 @@ void OptimizeScanWirelength(
     return scaleEdgeCost(man + jump_pen + blk, timing_mul[src]);
   };
 
-  // UCLA ScanOpt only supports unconstrained placement ordering with fixed
-  // begin/end points.
+  // If UCLA ScanOpt is selected (and there are no scan-order constraints), try
+  // to run it. When begin/end points aren't available yet (e.g., scan ports
+  // have not been created/placed), synthesize them from scan-pin locations so
+  // the solver still runs.
   if (config.getScanOrderSolver()
-      == ScanArchitectConfig::ScanOrderSolver::UclaScanOpt) {
-    if (hasScanOrderConstraints(config)) {
-      logger->warn(
-          utl::DFT,
-          187,
-          "UCLA_SCANOPT does not support scan order constraints; falling back "
-          "to SCANOPT.");
-    } else if (begin.has_value() && end.has_value()) {
-      UclaScanOptParams p;
-      p.seed = cfg->getScanOptSeed();
-      // Map OpenROAD ScanOpt rounds (default 500k) to UCLA majorLoops (default 100).
-      p.major_loops = std::max<uint64_t>(1, cfg->getScanOptRounds() / 5000);
-      p.n_descents = 5;
-      p.kick_move = 15;
-      p.n_near = 20;
-      p.only_2opt = false;
-      p.temp_control = cfg->getScanOptTempControl();
-      p.zero_temp = !cfg->getScanOptTempControl();
+          == ScanArchitectConfig::ScanOrderSolver::UclaScanOpt
+      && !has_constraints) {
+    const odb::Point u_begin
+        = inferUclaBeginPoint(scan_in_pts, names, begin, end, std::nullopt);
+    const odb::Point u_end = inferUclaEndPoint(scan_out_pts, names, end, u_begin);
 
-      std::vector<std::pair<int, int>> in_pts;
-      std::vector<std::pair<int, int>> out_pts;
-      in_pts.reserve(n);
-      out_pts.reserve(n);
-      for (std::size_t i = 0; i < n; ++i) {
-        in_pts.emplace_back(scan_in_pts[i].x(), scan_in_pts[i].y());
-        out_pts.emplace_back(scan_out_pts[i].x(), scan_out_pts[i].y());
+    std::vector<std::pair<int, int>> in_pts;
+    std::vector<std::pair<int, int>> out_pts;
+    in_pts.reserve(n);
+    out_pts.reserve(n);
+    for (std::size_t i = 0; i < n; ++i) {
+      in_pts.emplace_back(scan_in_pts[i].x(), scan_in_pts[i].y());
+      out_pts.emplace_back(scan_out_pts[i].x(), scan_out_pts[i].y());
+    }
+
+    std::vector<std::size_t> order;
+    try {
+      order = UclaScanOptOrder(
+          names,
+          in_pts,
+          out_pts,
+          std::make_pair(u_begin.x(), u_begin.y()),
+          std::make_pair(u_end.x(), u_end.y()),
+          uclaParamsFromConfig(config));
+    } catch (const std::exception& e) {
+      logger->warn(utl::DFT,
+                   188,
+                   "SCANOPT (UCLA) failed ({}); falling back to ILS.",
+                   e.what());
+      order.clear();
+    }
+
+    if (order.size() == n) {
+      if (!begin.has_value() && !end.has_value()) {
+        const auto ucla_cost = [&](std::size_t a, std::size_t b) -> int64_t {
+          return manhattanDistUcla(scan_out_pts[a], scan_in_pts[b]);
+        };
+        rotateOrderToDropWorstEdge(order, names, ucla_cost);
       }
 
-      std::vector<std::size_t> order;
-      try {
-        order = UclaScanOptOrder(
-            names,
-            in_pts,
-            out_pts,
-            std::make_pair(begin->x(), begin->y()),
-            std::make_pair(end->x(), end->y()),
-            p);
-      } catch (const std::exception& e) {
-        logger->warn(utl::DFT,
-                     188,
-                     "UCLA_SCANOPT failed ({}); falling back to SCANOPT.",
-                     e.what());
-        order.clear();
+      std::vector<std::unique_ptr<ScanCell>> ordered;
+      ordered.reserve(n);
+      for (const std::size_t i : order) {
+        ordered.emplace_back(std::move(cells[i]));
       }
-
-      if (order.size() == n) {
-        std::vector<std::unique_ptr<ScanCell>> ordered;
-        ordered.reserve(n);
-        for (const std::size_t i : order) {
-          ordered.emplace_back(std::move(cells[i]));
-        }
-        cells.swap(ordered);
-        return;
-      }
-    } else {
-      logger->warn(
-          utl::DFT,
-          189,
-          "UCLA_SCANOPT requires fixed begin/end points; falling back to "
-          "SCANOPT.");
+      cells.swap(ordered);
+      return;
     }
   }
 
@@ -3434,7 +3685,7 @@ void OptimizeScanWirelength(
     }
   }
 
-  if (config.getScanOrderSolver()
+  if (cfg->getScanOrderSolver()
       == ScanArchitectConfig::ScanOrderSolver::ScanOpt) {
     const auto deadline = scanOptDeadline(config);
 
