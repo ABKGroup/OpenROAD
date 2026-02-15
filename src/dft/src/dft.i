@@ -249,6 +249,11 @@ void set_dft_config_vertical_weight(double weight)
   getDft()->getMutableDftConfig()->getMutableScanArchitectConfig()->setVerticalWeight(weight);
 }
 
+void set_dft_config_blockage_weight(double weight)
+{
+  getDft()->getMutableDftConfig()->getMutableScanArchitectConfig()->setBlockageWeight(weight);
+}
+
 void set_dft_config_timing_setup_weight(double weight)
 {
   getDft()->getMutableDftConfig()->getMutableScanArchitectConfig()->setTimingWeightSetup(weight);

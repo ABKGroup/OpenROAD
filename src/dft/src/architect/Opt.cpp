@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
@@ -499,6 +500,160 @@ int64_t pinToNetDistance(const odb::Point& pin,
   }
   return best == kInfDistance ? 0 : best;
 }
+
+struct BlockageModel
+{
+  using Pt = bg::model::point<int, 2, bg::cs::cartesian>;
+  using Box = bg::model::box<Pt>;
+  using Value = std::pair<Box, std::size_t>;
+  using RTree = bgi::rtree<Value, bgi::rstar<4>>;
+
+  std::vector<odb::Rect> rects;
+  RTree rtree;
+
+  static BlockageModel build(odb::dbBlock* block)
+  {
+    BlockageModel model;
+    if (block == nullptr) {
+      return model;
+    }
+
+    for (odb::dbInst* inst : block->getInsts()) {
+      if (!inst->isPlaced()) {
+        continue;
+      }
+      odb::dbMaster* master = inst->getMaster();
+      if (master != nullptr && !(master->isBlock() || master->isPad())) {
+        continue;
+      }
+      odb::dbBox* bbox = inst->getBBox();
+      if (bbox == nullptr) {
+        continue;
+      }
+      const odb::Rect r = bbox->getBox();
+      if (r.xMin() >= r.xMax() || r.yMin() >= r.yMax()) {
+        continue;
+      }
+      model.rects.push_back(r);
+    }
+
+    for (odb::dbBlockage* blockage : block->getBlockages()) {
+      if (blockage->isSoft()) {
+        continue;
+      }
+      odb::dbBox* bbox = blockage->getBBox();
+      if (bbox == nullptr) {
+        continue;
+      }
+      const odb::Rect r = bbox->getBox();
+      if (r.xMin() >= r.xMax() || r.yMin() >= r.yMax()) {
+        continue;
+      }
+      model.rects.push_back(r);
+    }
+
+    std::vector<Value> data;
+    data.reserve(model.rects.size());
+    for (std::size_t i = 0; i < model.rects.size(); ++i) {
+      const odb::Rect& r = model.rects[i];
+      data.emplace_back(Box(Pt(r.xMin(), r.yMin()), Pt(r.xMax(), r.yMax())), i);
+    }
+    model.rtree = RTree(data);
+    return model;
+  }
+
+  int64_t detourCost(const odb::Point& a,
+                     const odb::Point& b,
+                     double vertical_weight) const
+  {
+    if (rects.empty() || (a.x() == b.x() && a.y() == b.y())) {
+      return 0;
+    }
+
+    const int x_min = std::min(a.x(), b.x());
+    const int x_max = std::max(a.x(), b.x());
+    const int y_min = std::min(a.y(), b.y());
+    const int y_max = std::max(a.y(), b.y());
+    const Box query(Pt(x_min, y_min), Pt(x_max, y_max));
+
+    std::vector<Value> hits;
+    rtree.query(bgi::intersects(query), std::back_inserter(hits));
+    if (hits.empty()) {
+      return 0;
+    }
+
+    static constexpr int kMargin = 1;
+
+    const auto overlaps_closed = [](int a1, int a2, int b1, int b2) -> bool {
+      const int lo1 = std::min(a1, a2);
+      const int hi1 = std::max(a1, a2);
+      const int lo2 = std::min(b1, b2);
+      const int hi2 = std::max(b1, b2);
+      return lo1 <= hi2 && lo2 <= hi1;
+    };
+
+    const auto h_intersects = [&](int x1, int x2, int y, const odb::Rect& r) -> bool {
+      if (y < r.yMin() || y > r.yMax()) {
+        return false;
+      }
+      return overlaps_closed(x1, x2, r.xMin(), r.xMax());
+    };
+
+    const auto v_intersects = [&](int y1, int y2, int x, const odb::Rect& r) -> bool {
+      if (x < r.xMin() || x > r.xMax()) {
+        return false;
+      }
+      return overlaps_closed(y1, y2, r.yMin(), r.yMax());
+    };
+
+    const auto vertical_detour = [&](int y, const odb::Rect& r) -> int64_t {
+      const int64_t below
+          = std::abs(static_cast<int64_t>(y) - (static_cast<int64_t>(r.yMin()) - kMargin));
+      const int64_t above
+          = std::abs(static_cast<int64_t>(y) - (static_cast<int64_t>(r.yMax()) + kMargin));
+      const int64_t dy = std::min(below, above);
+      const int64_t wy = static_cast<int64_t>(std::llround(vertical_weight * dy));
+      return 2 * wy;
+    };
+
+    const auto horizontal_detour = [&](int x, const odb::Rect& r) -> int64_t {
+      const int64_t left
+          = std::abs(static_cast<int64_t>(x) - (static_cast<int64_t>(r.xMin()) - kMargin));
+      const int64_t right
+          = std::abs(static_cast<int64_t>(x) - (static_cast<int64_t>(r.xMax()) + kMargin));
+      const int64_t dx = std::min(left, right);
+      return 2 * dx;
+    };
+
+    // Estimate the minimum extra rectilinear length required to avoid routing
+    // through hard blockages, by evaluating the two canonical L-shaped routes
+    // (HV and VH) and picking the cheaper one.
+    int64_t hv = 0;
+    int64_t vh = 0;
+
+    for (const auto& hit : hits) {
+      const odb::Rect& r = rects[hit.second];
+
+      // Horizontal-then-vertical (a -> (b.x, a.y) -> b)
+      if (h_intersects(a.x(), b.x(), a.y(), r)) {
+        hv += vertical_detour(a.y(), r);
+      }
+      if (v_intersects(a.y(), b.y(), b.x(), r)) {
+        hv += horizontal_detour(b.x(), r);
+      }
+
+      // Vertical-then-horizontal (a -> (a.x, b.y) -> b)
+      if (v_intersects(a.y(), b.y(), a.x(), r)) {
+        vh += horizontal_detour(a.x(), r);
+      }
+      if (h_intersects(a.x(), b.x(), b.y(), r)) {
+        vh += vertical_detour(b.y(), r);
+      }
+    }
+
+    return std::min(hv, vh);
+  }
+};
 
 struct ScanOptMatrix
 {
@@ -1818,6 +1973,7 @@ void optimizeScanWirelengthWithConstraints(
     const std::vector<std::string_view>& names,
     utl::Logger* logger,
     const std::function<int64_t(std::size_t, std::size_t)>& edge_cost,
+    const std::function<int64_t(const odb::Point&, const odb::Point&)>& point_cost,
     const std::optional<odb::Point>& begin,
     const std::optional<odb::Point>& end_pt,
     double vertical_weight)
@@ -2210,18 +2366,14 @@ void optimizeScanWirelengthWithConstraints(
         if (prev_exit.has_value()) {
           cost = edge_cost(prev_exit.value(), components[ci].entry);
         } else if (begin.has_value()) {
-          cost = manhattanDist(begin.value(),
-                               scan_in_pts[components[ci].entry],
-                               vertical_weight);
+          cost = point_cost(begin.value(), scan_in_pts[components[ci].entry]);
         } else {
           const odb::Point& p = scan_in_pts[components[ci].entry];
           cost = static_cast<int64_t>(p.x()) + static_cast<int64_t>(p.y());
         }
 
         if (remaining == 1 && end_pt.has_value()) {
-          cost += manhattanDist(scan_out_pts[components[ci].exit],
-                                end_pt.value(),
-                                vertical_weight);
+          cost += point_cost(scan_out_pts[components[ci].exit], end_pt.value());
         }
 
         if (!found || cost < best_cost
@@ -2302,9 +2454,7 @@ void optimizeScanWirelengthWithConstraints(
           const Component& c = components[idx + off];
           int64_t key = 0;
           if (begin.has_value()) {
-            key = manhattanDist(begin.value(),
-                                scan_in_pts[c.entry],
-                                vertical_weight);
+            key = point_cost(begin.value(), scan_in_pts[c.entry]);
           } else {
             const odb::Point& p = scan_in_pts[c.entry];
             key = static_cast<int64_t>(p.x()) + static_cast<int64_t>(p.y());
@@ -2328,9 +2478,7 @@ void optimizeScanWirelengthWithConstraints(
       if (last_bucket && end_pt.has_value()) {
         terminal_cost = [&](std::size_t a) -> int64_t {
           const Component& ca = components[idx + a];
-          return manhattanDist(scan_out_pts[ca.exit],
-                               end_pt.value(),
-                               vertical_weight);
+          return point_cost(scan_out_pts[ca.exit], end_pt.value());
         };
       }
 
@@ -2376,25 +2524,37 @@ void OptimizeScanWirelengthPinToNet(std::vector<std::unique_ptr<ScanCell>>& cell
     return;
   }
 
+  const double blockage_weight = config.getBlockageWeight();
+
   std::optional<odb::Point> begin;
   std::optional<odb::Point> end;
-  odb::dbBlock* endpoint_block = nullptr;
+  odb::dbBlock* design_block = nullptr;
   if (endpoints.has_value()) {
-    if ((endpoints->begin.has_value()
-         && endpoints->begin->type
-                == ScanArchitectConfig::ChainEndpoint::Type::Term)
-        || (endpoints->end.has_value()
-            && endpoints->end->type
-                   == ScanArchitectConfig::ChainEndpoint::Type::Term)) {
-      endpoint_block = InferBlockFromPlacedCells(cells);
+    const bool need_term_block
+        = (endpoints->begin.has_value()
+           && endpoints->begin->type
+                  == ScanArchitectConfig::ChainEndpoint::Type::Term)
+          || (endpoints->end.has_value()
+              && endpoints->end->type
+                     == ScanArchitectConfig::ChainEndpoint::Type::Term);
+    if (need_term_block) {
+      design_block = InferBlockFromPlacedCells(cells);
     }
+  }
+  if (blockage_weight > 0.0 && design_block == nullptr) {
+    design_block = InferBlockFromPlacedCells(cells);
+  }
+
+  std::optional<BlockageModel> blockages;
+  if (blockage_weight > 0.0 && design_block != nullptr) {
+    blockages = BlockageModel::build(design_block);
   }
   if (endpoints.has_value()) {
     if (endpoints->begin.has_value()) {
-      begin = EndpointPoint(*endpoints->begin, endpoint_block, logger);
+      begin = EndpointPoint(*endpoints->begin, design_block, logger);
     }
     if (endpoints->end.has_value()) {
-      end = EndpointPoint(*endpoints->end, endpoint_block, logger);
+      end = EndpointPoint(*endpoints->end, design_block, logger);
     }
   }
 
@@ -2426,12 +2586,27 @@ void OptimizeScanWirelengthPinToNet(std::vector<std::unique_ptr<ScanCell>>& cell
   const int64_t local_scale
       = estimateLocalManhattanScale(scan_in_pts, vertical_weight);
 
+  const auto blockage_cost
+      = [&](const odb::Point& a, const odb::Point& b) -> int64_t {
+    if (!blockages.has_value() || blockage_weight <= 0.0) {
+      return 0;
+    }
+    return scaleEdgeCost(blockages->detourCost(a, b, vertical_weight),
+                         blockage_weight);
+  };
+
+  const auto point_cost = [&](const odb::Point& a,
+                              const odb::Point& b) -> int64_t {
+    const int64_t man = manhattanDist(a, b, vertical_weight);
+    const int64_t jump_pen = jumpPenaltyFromManhattan(man, local_scale);
+    return man + jump_pen + blockage_cost(a, b);
+  };
+
   std::size_t start_index = 0;
   int64_t lowest = std::numeric_limits<int64_t>::max();
   if (begin.has_value()) {
     for (std::size_t i = 0; i < n; ++i) {
-      const int64_t score
-          = manhattanDist(begin.value(), scan_in_pts[i], vertical_weight);
+      const int64_t score = point_cost(begin.value(), scan_in_pts[i]);
       if (score < lowest
           || (score == lowest && names[i] < names[start_index])) {
         start_index = i;
@@ -2463,12 +2638,13 @@ void OptimizeScanWirelengthPinToNet(std::vector<std::unique_ptr<ScanCell>>& cell
     const int64_t man
         = manhattanDist(scan_out_pts[src], scan_in_pts[dst], vertical_weight);
     const int64_t jump_pen = jumpPenaltyFromManhattan(man, local_scale);
+    const int64_t blk = blockage_cost(scan_out_pts[src], scan_in_pts[dst]);
     if (p2n != 0 || !net_geoms[src].boxes.empty()
         || !net_geoms[src].terminals.empty()) {
-      return scaleEdgeCost(p2n + man + jump_pen, timing_mul[src]);
+      return scaleEdgeCost(p2n + man + jump_pen + blk, timing_mul[src]);
     }
     // No routing/pin geometry available; fall back to pin-based Manhattan.
-    return scaleEdgeCost(man + jump_pen, timing_mul[src]);
+    return scaleEdgeCost(man + jump_pen + blk, timing_mul[src]);
   };
 
   if (hasScanOrderConstraints(config)) {
@@ -2481,6 +2657,7 @@ void OptimizeScanWirelengthPinToNet(std::vector<std::unique_ptr<ScanCell>>& cell
         names,
         logger,
         edge_cost,
+        point_cost,
         begin,
         end,
         vertical_weight);
@@ -2521,10 +2698,7 @@ void OptimizeScanWirelengthPinToNet(std::vector<std::unique_ptr<ScanCell>>& cell
           int64_t cost = kInfDistance;
           if (have_begin && i == begin_node) {
             if (j < n) {
-              const int64_t man
-                  = manhattanDist(begin.value(), scan_in_pts[j], vertical_weight);
-              const int64_t jump_pen = jumpPenaltyFromManhattan(man, local_scale);
-              cost = man + jump_pen;
+              cost = point_cost(begin.value(), scan_in_pts[j]);
             } else {
               cost = kInfDistance;
             }
@@ -2534,10 +2708,8 @@ void OptimizeScanWirelengthPinToNet(std::vector<std::unique_ptr<ScanCell>>& cell
             cost = kInfDistance;  // don't leave the fixed end node
           } else if (end_fixed && j == end_node) {
             if (i < n) {
-              const int64_t man
-                  = manhattanDist(scan_out_pts[i], end.value(), vertical_weight);
-              const int64_t jump_pen = jumpPenaltyFromManhattan(man, local_scale);
-              cost = scaleEdgeCost(man + jump_pen, timing_mul[i]);
+              cost = scaleEdgeCost(point_cost(scan_out_pts[i], end.value()),
+                                   timing_mul[i]);
             } else {
               cost = kInfDistance;
             }
@@ -2670,7 +2842,7 @@ void OptimizeScanWirelengthPinToNet(std::vector<std::unique_ptr<ScanCell>>& cell
     if (!end_fixed) {
       return 0;
     }
-    return manhattanDist(scan_out_pts[idx], end.value(), vertical_weight);
+    return point_cost(scan_out_pts[idx], end.value());
   };
   const auto no_next_scan_cell = [&]() -> void {
     logger->error(utl::DFT, 17, "Couldn't find next scan cell to order");
@@ -3064,6 +3236,7 @@ void OptimizeScanWirelength(
   }
 
   const double vertical_weight = cfg->getVerticalWeight();
+  const double blockage_weight = cfg->getBlockageWeight();
   const auto manhattan = [&](const odb::Point& a, const odb::Point& b) -> int64_t {
     return manhattanDist(a, b, vertical_weight);
   };
@@ -3096,30 +3269,57 @@ void OptimizeScanWirelength(
 
   std::optional<odb::Point> begin;
   std::optional<odb::Point> end;
-  odb::dbBlock* endpoint_block = nullptr;
+  odb::dbBlock* design_block = nullptr;
   if (endpoints.has_value()) {
-    if ((endpoints->begin.has_value()
-         && endpoints->begin->type
-                == ScanArchitectConfig::ChainEndpoint::Type::Term)
-        || (endpoints->end.has_value()
-            && endpoints->end->type
-                   == ScanArchitectConfig::ChainEndpoint::Type::Term)) {
-      endpoint_block = InferBlockFromPlacedCells(cells);
+    const bool need_term_block
+        = (endpoints->begin.has_value()
+           && endpoints->begin->type
+                  == ScanArchitectConfig::ChainEndpoint::Type::Term)
+          || (endpoints->end.has_value()
+              && endpoints->end->type
+                     == ScanArchitectConfig::ChainEndpoint::Type::Term);
+    if (need_term_block) {
+      design_block = InferBlockFromPlacedCells(cells);
     }
+  }
+  if (blockage_weight > 0.0 && design_block == nullptr) {
+    design_block = InferBlockFromPlacedCells(cells);
+  }
+
+  std::optional<BlockageModel> blockages;
+  if (blockage_weight > 0.0 && design_block != nullptr) {
+    blockages = BlockageModel::build(design_block);
   }
   if (endpoints.has_value()) {
     if (endpoints->begin.has_value()) {
-      begin = EndpointPoint(*endpoints->begin, endpoint_block, logger);
+      begin = EndpointPoint(*endpoints->begin, design_block, logger);
     }
     if (endpoints->end.has_value()) {
-      end = EndpointPoint(*endpoints->end, endpoint_block, logger);
+      end = EndpointPoint(*endpoints->end, design_block, logger);
     }
   }
+
+  const auto blockage_cost
+      = [&](const odb::Point& a, const odb::Point& b) -> int64_t {
+    if (!blockages.has_value() || blockage_weight <= 0.0) {
+      return 0;
+    }
+    return scaleEdgeCost(blockages->detourCost(a, b, vertical_weight),
+                         blockage_weight);
+  };
+
+  const auto point_cost = [&](const odb::Point& a,
+                              const odb::Point& b) -> int64_t {
+    const int64_t man = manhattan(a, b);
+    const int64_t jump_pen = jumpPenaltyFromManhattan(man, local_scale);
+    return man + jump_pen + blockage_cost(a, b);
+  };
 
   const auto edge_cost = [&](std::size_t src, std::size_t dst) -> int64_t {
     const int64_t man = manhattan(scan_out_pts[src], scan_in_pts[dst]);
     const int64_t jump_pen = jumpPenaltyFromManhattan(man, local_scale);
-    return scaleEdgeCost(man + jump_pen, timing_mul[src]);
+    const int64_t blk = blockage_cost(scan_out_pts[src], scan_in_pts[dst]);
+    return scaleEdgeCost(man + jump_pen + blk, timing_mul[src]);
   };
 
   // UCLA ScanOpt only supports unconstrained placement ordering with fixed
@@ -3198,6 +3398,7 @@ void OptimizeScanWirelength(
         names,
         logger,
         edge_cost,
+        point_cost,
         begin,
         end,
         vertical_weight);
@@ -3211,7 +3412,7 @@ void OptimizeScanWirelength(
 
   if (begin.has_value()) {
     for (size_t i = 0; i < n; i++) {
-      const int64_t dist = manhattan(begin.value(), scan_in_pts[i]);
+      const int64_t dist = point_cost(begin.value(), scan_in_pts[i]);
       if (dist < lowest_dist
           || (dist == lowest_dist && names[i] < names[start_index])) {
         start_index = i;
@@ -3267,10 +3468,7 @@ void OptimizeScanWirelength(
           int64_t cost = kInfDistance;
           if (have_begin && i == begin_node) {
             if (j < n) {
-              const int64_t man
-                  = manhattanDist(begin.value(), scan_in_pts[j], vertical_weight);
-              const int64_t jump_pen = jumpPenaltyFromManhattan(man, local_scale);
-              cost = man + jump_pen;
+              cost = point_cost(begin.value(), scan_in_pts[j]);
             } else {
               cost = kInfDistance;
             }
@@ -3280,10 +3478,8 @@ void OptimizeScanWirelength(
             cost = kInfDistance;  // don't leave the fixed end node
           } else if (end_fixed && j == end_node) {
             if (i < n) {
-              const int64_t man
-                  = manhattanDist(scan_out_pts[i], end.value(), vertical_weight);
-              const int64_t jump_pen = jumpPenaltyFromManhattan(man, local_scale);
-              cost = scaleEdgeCost(man + jump_pen, timing_mul[i]);
+              cost = scaleEdgeCost(point_cost(scan_out_pts[i], end.value()),
+                                   timing_mul[i]);
             } else {
               cost = kInfDistance;
             }
@@ -3437,7 +3633,7 @@ void OptimizeScanWirelength(
         }
         int64_t cost = edge_cost(cur, i);
         if (end.has_value() && last_step) {
-          cost += manhattan(scan_out_pts[i], end.value());
+          cost += point_cost(scan_out_pts[i], end.value());
         }
         if (!found || cost < best_cost
             || (cost == best_cost && names[i] < names[best])) {
@@ -3469,12 +3665,12 @@ void OptimizeScanWirelength(
         const int64_t before
             = edge_cost(prev, a) + edge_cost(a, b)
               + (has_next ? edge_cost(b, next) : 0)
-              + (!has_next && end.has_value() ? manhattan(scan_out_pts[b], end.value())
+              + (!has_next && end.has_value() ? point_cost(scan_out_pts[b], end.value())
                                               : 0);
         const int64_t after
             = edge_cost(prev, b) + edge_cost(b, a)
               + (has_next ? edge_cost(a, next) : 0)
-              + (!has_next && end.has_value() ? manhattan(scan_out_pts[a], end.value())
+              + (!has_next && end.has_value() ? point_cost(scan_out_pts[a], end.value())
                                               : 0);
 
         if (after < before) {
@@ -3504,7 +3700,7 @@ void OptimizeScanWirelength(
 	    if (!end_fixed) {
 	      return 0;
 	    }
-	    return manhattan(scan_out_pts[idx], end.value());
+	    return point_cost(scan_out_pts[idx], end.value());
 	  };
 
 	  const auto path_cost = [&](const std::vector<std::size_t>& order) -> int64_t {
@@ -3513,7 +3709,7 @@ void OptimizeScanWirelength(
 	    }
 	    int64_t total = 0;
 	    if (begin.has_value()) {
-	      total += manhattan(begin.value(), scan_in_pts[order.front()]);
+	      total += point_cost(begin.value(), scan_in_pts[order.front()]);
 	    }
 	    for (std::size_t i = 1; i < order.size(); ++i) {
 	      total += edge_cost(order[i - 1], order[i]);

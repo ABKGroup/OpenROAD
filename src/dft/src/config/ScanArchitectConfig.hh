@@ -163,6 +163,14 @@ class ScanArchitectConfig
   void setVerticalWeight(double weight);
   double getVerticalWeight() const;
 
+  // Optional blockage-aware penalty:
+  // Adds a detour cost term when a straight rectilinear (L-shaped) connection
+  // between scan pins would cross hard macros / placement blockages.
+  // The penalty is scaled by blockage_weight and added to the ordering edge
+  // cost as a soft proxy for blockage/congestion avoidance.
+  void setBlockageWeight(double weight);
+  double getBlockageWeight() const;
+
   // Optional timing-aware penalty (Gupta'03-style extension):
   // Edge costs are scaled by a penalty based on timing slack at the scan-out
   // driver pin of the source cell. This is a heuristic proxy for "scan
@@ -284,6 +292,9 @@ class ScanArchitectConfig
 
   // Preferred wiring direction (vertical weighting).
   double vertical_weight_{1.0};
+
+  // Blockage-aware detour penalty weight (0 disables).
+  double blockage_weight_{1.0};
 
   // Timing-aware penalty knobs.
   double timing_weight_setup_{0.0};

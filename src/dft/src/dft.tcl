@@ -124,6 +124,7 @@ sta::define_cmd_args "set_dft_config" { [-max_length max_length]
                                         [-scanopt_temp_control scanopt_temp_control]
                                         [-scanopt_t_div scanopt_t_div]
                                         [-vertical_weight vertical_weight]
+                                        [-blockage_weight blockage_weight]
                                         [-timing_setup_weight timing_setup_weight]
                                         [-timing_hold_weight timing_hold_weight]
                                         [-timing_critical_slack timing_critical_slack]
@@ -162,6 +163,7 @@ proc set_dft_config { args } {
       -scanopt_temp_control
       -scanopt_t_div
       -vertical_weight
+      -blockage_weight
       -timing_setup_weight
       -timing_hold_weight
       -timing_critical_slack
@@ -287,6 +289,17 @@ proc set_dft_config { args } {
       utl::error DFT 99 "Expected a positive value for -vertical_weight"
     }
     dft::set_dft_config_vertical_weight $w
+  }
+
+  if { [info exists keys(-blockage_weight)] } {
+    set w $keys(-blockage_weight)
+    if { ![string is double -strict $w] } {
+      utl::error DFT 234 "Expected a floating-point value for -blockage_weight"
+    }
+    if { $w < 0.0 } {
+      utl::error DFT 235 "Expected a non-negative value for -blockage_weight"
+    }
+    dft::set_dft_config_blockage_weight $w
   }
 
   foreach {flag setter} {

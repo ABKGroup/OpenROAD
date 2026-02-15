@@ -244,6 +244,11 @@ double ScanArchitectConfig::getVerticalWeight() const
   return vertical_weight_;
 }
 
+double ScanArchitectConfig::getBlockageWeight() const
+{
+  return blockage_weight_;
+}
+
 double ScanArchitectConfig::getTimingWeightSetup() const
 {
   return timing_weight_setup_;
@@ -354,6 +359,13 @@ void ScanArchitectConfig::setVerticalWeight(double weight)
 {
   if (weight > 0.0) {
     vertical_weight_ = weight;
+  }
+}
+
+void ScanArchitectConfig::setBlockageWeight(double weight)
+{
+  if (weight >= 0.0) {
+    blockage_weight_ = weight;
   }
 }
 
@@ -1235,6 +1247,7 @@ void ScanArchitectConfig::report(utl::Logger* logger) const
   logger->report("- Scan Order Solver: {}",
                  ScanOrderSolverName(scan_order_solver_));
   logger->report("- Vertical Weight: {:.3f}", vertical_weight_);
+  logger->report("- Blockage Weight: {:.3f}", blockage_weight_);
   logger->report("- Max Imbalance: {:.1f}%", max_imbalance_percent_);
   if (timing_weight_setup_ != 0.0 || timing_weight_hold_ != 0.0) {
     logger->report("- Timing Setup Weight: {:.3f}", timing_weight_setup_);
