@@ -30,6 +30,7 @@ The command `set_dft_config` sets the DFT configuration variables.
 	    [-max_chains <int>]
 	    [-max_imbalance <float>]
 	    [-clock_mixing <string>]
+	    [-polarity_mode <string>]
 	    [-scan_order_metric <string>]
 	    [-scan_order_solver <string>]
 	    [-scanopt_rounds <int>]
@@ -38,6 +39,7 @@ The command `set_dft_config` sets the DFT configuration variables.
 	    [-scanopt_temp_control <0|1>]
 	    [-scanopt_t_div <float>]
 	    [-vertical_weight <float>]
+	    [-blockage_weight <float>]
 	    [-timing_setup_weight <float>]
 	    [-timing_hold_weight <float>]
 	    [-timing_critical_slack <float>]
@@ -69,7 +71,7 @@ The command `set_dft_config` sets the DFT configuration variables.
 | `-max_chains` | Maximum total number of scan chains across the design. In `no_mix`, this must be at least the number of clock domains. |
 | `-max_imbalance` | Maximum allowed chain length imbalance (percent). Constraint: `max(bits)/min(bits) <= 1 + max_imbalance/100`. Default is `30`. |
 | `-clock_mixing` | How scan cells are partitioned into chains by clock. `no_mix` (default) does not mix different clock domains in a chain. `clock_mix` mixes clock domains (requires lockup insertion between domains). |
-| `-polarity_mode` | How scan cells of different edge polarity are handled within a chain. `mid` (default) allows mixed polarity, stitching falling-edge cells before rising-edge cells in each chain. `strict` forbids mixing polarities within a chain, requiring separate chains when both polarities are present. |
+| `-polarity_mode` | How scan cells of different edge polarity are handled within a chain. `strict` (default) forbids mixing polarities within a chain, requiring separate chains when both polarities are present. `mid` allows mixed polarity, stitching falling-edge cells before rising-edge cells in each chain. |
 | `-scan_order_metric` | Metric for ordering scan cells within each chain. `PLACEMENT` uses scan-pin Manhattan distance. `PIN_TO_NET` uses pin-to-net distance to global-route guides (or detailed routes when present), falling back to placement distance. |
 | `-scan_order_solver` | Scan ordering solver. `HEURISTIC` is greedy + local cleanup. `SCANOPT` is an iterated local search (default). `UCLA_SCANOPT` uses the UCLA ScanOptpack-010411 reference implementation (fixed begin/end only; placement metric). |
 | `-scanopt_rounds` | Iteration budget for `-scan_order_solver SCANOPT` (default `500000`). |
@@ -78,6 +80,7 @@ The command `set_dft_config` sets the DFT configuration variables.
 | `-scanopt_temp_control` | Enable temperature control (optional uphill acceptance) for `SCANOPT` (`0`/`1`). |
 | `-scanopt_t_div` | Temperature divisor for `SCANOPT` temperature control (larger reduces uphill acceptance). |
 | `-vertical_weight` | Preferred wiring direction tuning. Values `>1` penalize vertical movement more than horizontal. Default `1.0`. |
+| `-blockage_weight` | Blockage-aware ordering penalty weight. Adds an estimated detour cost when a straight rectilinear scan connection would cross hard macros / placement blockages. `0` disables. Default `1.0`. |
 | `-timing_setup_weight` | Optional timing-aware ordering penalty weight (setup). |
 | `-timing_hold_weight` | Optional timing-aware ordering penalty weight (hold). |
 | `-timing_critical_slack` | Slack threshold for timing-aware penalties (`0` = only penalize negative slack). |
