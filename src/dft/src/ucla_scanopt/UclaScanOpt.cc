@@ -3,13 +3,15 @@
 
 #include "UclaScanOpt.hh"
 
+#include <algorithm>
 #include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <string>
 
 #include <ABKCommon/abkseed.h>
-#include <ScanOpt/optimizer1.h>
+#include <ScanOpt/optimizer.h>
+#include <ScanOpt/scanTourDZ.h>
 
 namespace dft {
 namespace {
@@ -53,6 +55,15 @@ class FlatScanChain : public abkscanopt::ScanChain
     _pathValid = true;
     computeInverse();
   }
+
+  void restorePath(const std::vector<unsigned>& path)
+  {
+    _path = path;
+    _pathValid = true;
+    computeInverse();
+  }
+
+  std::vector<unsigned>& mutablePath() { return _path; }
 };
 
 unsigned clampToUnsigned(uint64_t v)
@@ -85,6 +96,105 @@ void configureSeedHandlerOnce(uint64_t seed)
     // deterministic across runs.
     SeedHandler::overrideExternalSeed(clampToDeterministicSeed(seed));
   });
+}
+
+double optimizeLevelSafe(FlatScanChain& chain,
+                         RandomRawUnsigned& randuns,
+                         const abkscanopt::Optimizer::Params& params)
+{
+  abkscanopt::ScanTourDZ::OptParams opt_params;
+  opt_params.nDescents = params.nDescents;
+  opt_params.kickMove = params.kickMove;
+  opt_params.only2Opt = params.only2Opt;
+  opt_params.temp_control = params.temp_control;
+  opt_params.bZeroFix = true;
+
+  const unsigned collapse_size = chain.getNumCells() - 1;
+  const unsigned in_idx = chain.getPath()[0];
+  const unsigned out_idx = chain.getPath()[collapse_size];
+
+  unsigned nnear = params.nnear;
+  if (nnear > collapse_size - 1) {
+    nnear = collapse_size - 1;
+  }
+
+  abkscanopt::ScanTourDZ tour(chain, nnear, randuns, opt_params);
+  if (!chain.isSubpath()) {
+    tour.scoOptAll();
+
+    unsigned lesser = in_idx;
+    unsigned greater = out_idx;
+    if (lesser > greater) {
+      std::swap(lesser, greater);
+    }
+
+    std::vector<unsigned> collapsed_path = tour.getPath();
+    auto zero_it = std::find(collapsed_path.begin(), collapsed_path.end(), 0U);
+    if (zero_it == collapsed_path.end()) {
+      throw std::runtime_error("UclaScanOptOrder: missing distinguished zero");
+    }
+
+    // UCLApack's Optimizer1 expects the distinguished-zero cell to remain in
+    // position 0 of the tour. Some cases (notably when there are no partial
+    // order constraints) can return a rotated tour where the zero cell is not
+    // first, which later triggers an ABKCommon fatal error while "uncollapsing"
+    // the endpoints. Canonicalize by rotating the cycle so the zero cell is
+    // always first.
+    if (zero_it != collapsed_path.begin()) {
+      std::rotate(collapsed_path.begin(), zero_it, collapsed_path.end());
+    }
+
+    std::vector<unsigned>& path = chain.mutablePath();
+    for (unsigned i = 1; i < collapse_size; ++i) {
+      const unsigned idx = collapsed_path[i];
+      if (idx == 0U) {
+        throw std::runtime_error(
+            "UclaScanOptOrder: internal distinguished zero after rotation");
+      }
+      path[i] = abkscanopt::ScanCells::uncollapseIndex(idx, lesser, greater);
+    }
+
+    chain.computeInverse();
+  }
+
+  return tour.scoTourCost();
+}
+
+void optimizeChainSafe(FlatScanChain& chain,
+                       RandomRawUnsigned& randuns,
+                       const abkscanopt::Optimizer::Params& params)
+{
+  const unsigned major_loops = std::max(1U, params.majorLoops);
+
+  std::vector<unsigned> best_path = chain.getPath();
+  double best_cost = std::numeric_limits<double>::infinity();
+
+  std::vector<unsigned> last_path;
+  double last_cost = std::numeric_limits<double>::infinity();
+  bool have_last = false;
+
+  for (unsigned loop = 0; loop < major_loops; ++loop) {
+    const double cost = optimizeLevelSafe(chain, randuns, params);
+
+    if (cost < best_cost) {
+      best_cost = cost;
+      best_path = chain.getPath();
+    }
+
+    if (params.zeroTemp) {
+      if (!have_last || cost < last_cost) {
+        have_last = true;
+        last_cost = cost;
+        last_path = chain.getPath();
+      } else {
+        chain.restorePath(last_path);
+      }
+    }
+  }
+
+  if (!best_path.empty()) {
+    chain.restorePath(best_path);
+  }
 }
 
 }  // namespace
@@ -158,9 +268,7 @@ std::vector<std::size_t> UclaScanOptOrder(
   p.temp_control = params.temp_control;
   p.zeroTemp = params.zero_temp;
 
-  // Runs optimization in ctor and updates chain path.
-  abkscanopt::Optimizer1 opt(chain, randuns, p);
-  (void) opt;
+  optimizeChainSafe(chain, randuns, p);
 
   const auto& path = chain.getPath();
   if (path.size() != n + 2) {
