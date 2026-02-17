@@ -12,7 +12,7 @@ create_clock -name clock2 -period 2.0000 -waveform {0.0000 1.0000} [get_ports {c
 
 set constraints_file [make_result_file group_cross_polarity_infeasible_sky130.constraints]
 set fp [open $constraints_file w]
-puts $fp "group g1 ff1_clk1_rising ff1_clk1_falling"
+puts $fp "fixed_edge ff1_clk1_rising ff1_clk1_falling"
 close $fp
 
 set_dft_config -chain_count 2 -clock_mixing clock_mix -polarity_mode strict \
@@ -25,4 +25,3 @@ if { $rc == 0 } {
   error "Expected group_cross_polarity_infeasible_sky130 to fail due to cross-polarity grouping"
 }
 puts "Caught expected error: $msg"
-

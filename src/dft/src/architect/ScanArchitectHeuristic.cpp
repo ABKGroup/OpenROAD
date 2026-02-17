@@ -1636,21 +1636,9 @@ std::vector<PlacedBundle> buildConstraintBundles(
 
   UnionFind uf(n);
 
-  // Union group members.
-  for (const auto& group : config.getScanOrderGroups()) {
-    std::optional<std::size_t> first;
-    for (const std::string& inst : group.inst_names) {
-      auto it = name_to_idx.find(inst);
-      if (it == name_to_idx.end()) {
-        continue;
-      }
-      if (!first.has_value()) {
-        first = it->second;
-      } else {
-        uf.unite(first.value(), it->second);
-      }
-    }
-  }
+  // NOTE: Group constraints are ordering constraints and may be split across
+  // chains. Do not union group members here; packing uses only constraints that
+  // require instances to be in the same chain (e.g., fixed edges, assignments).
 
   // Union fixed-edge endpoints (must be in same chain).
   for (const auto& edge : config.getScanOrderFixedEdges()) {
@@ -2761,21 +2749,6 @@ void ScanArchitectHeuristic::architect()
     }
 
     UnionFind uf(n);
-
-    for (const auto& group : config_.getScanOrderGroups()) {
-      std::optional<std::size_t> first;
-      for (const std::string& inst : group.inst_names) {
-        const auto it = name_to_idx.find(std::string_view(inst));
-        if (it == name_to_idx.end()) {
-          continue;
-        }
-        if (!first.has_value()) {
-          first = it->second;
-        } else {
-          uf.unite(first.value(), it->second);
-        }
-      }
-    }
 
     for (const auto& edge : config_.getScanOrderFixedEdges()) {
       const auto it_from = name_to_idx.find(std::string_view(edge.from_inst));

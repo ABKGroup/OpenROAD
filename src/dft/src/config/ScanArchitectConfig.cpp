@@ -1106,7 +1106,9 @@ bool ScanArchitectConfig::loadScanOrderConstraintsFile(
     }
   }
 
-  // Resolve hierarchical groups and apply them as "stay in one chain" constraints.
+  // Resolve hierarchical groups. Group membership is used for scan ordering
+  // constraints (e.g., "before") and does not, by itself, force instances into
+  // the same scan chain.
   std::unordered_map<std::string, std::vector<std::string>> expanded_groups;
   std::unordered_map<std::string, int> group_state;  // 0=unseen,1=visiting,2=done
 
