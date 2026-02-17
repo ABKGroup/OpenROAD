@@ -11,6 +11,7 @@ or_integration_tests(
     split_multibit_scan_cells_sky130
     place_sort_sky130
     ucla_scanopt_place_sort_sky130
+    group_cross_polarity_infeasible_sky130
     scan_architect_clock_mix_sky130
     scan_architect_no_mix_sky130
     scan_architect_no_mix_nangate45

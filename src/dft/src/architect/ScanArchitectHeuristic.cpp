@@ -2793,20 +2793,22 @@ void ScanArchitectHeuristic::architect()
       const std::size_t idx = name_to_idx.find(inst)->second;
       const std::size_t root = uf.find(idx);
 
-      // Validate that constrained components do not span hash domains when
-      // clock mixing is disabled.
-      if (config_.getClockMixing() == ScanArchitectConfig::ClockMixing::NoMix) {
-        if (!root_domain[root].has_value()) {
-          root_domain[root] = domain;
-        } else if (root_domain[root].value() != domain) {
-          logger_->error(
-              utl::DFT,
-              176,
-              "Scan constraints infeasible: instances forced into one chain "
-              "span multiple hash domains ({} and {}) while clock_mixing=NoMix.",
-              root_domain[root].value(),
-              domain);
-        }
+      // Validate that constrained components do not span hash domains under the
+      // current clock_mixing/polarity_mode configuration. Hash domains represent
+      // partitions that cannot be stitched into a single scan chain.
+      if (!root_domain[root].has_value()) {
+        root_domain[root] = domain;
+      } else if (root_domain[root].value() != domain) {
+        logger_->error(
+            utl::DFT,
+            176,
+            "Scan constraints infeasible: instances forced into one chain span "
+            "multiple hash domains ({} and {}) under clock_mixing={} "
+            "polarity_mode={}.",
+            root_domain[root].value(),
+            domain,
+            ScanArchitectConfig::ClockMixingName(config_.getClockMixing()),
+            ScanArchitectConfig::PolarityModeName(config_.getPolarityMode()));
       }
 
       const std::optional<std::string_view> asn
@@ -2825,17 +2827,19 @@ void ScanArchitectHeuristic::architect()
             asn.value());
       }
 
-      if (config_.getClockMixing() == ScanArchitectConfig::ClockMixing::NoMix
-          && cit->second.hash_domain != domain) {
+      if (cit->second.hash_domain != domain) {
         logger_->error(
             utl::DFT,
             178,
             "Scan constraints infeasible: instance '{}' in hash domain {} is "
-            "assigned to chain '{}' in hash domain {} while clock_mixing=NoMix.",
+            "assigned to chain '{}' in hash domain {} under clock_mixing={} "
+            "polarity_mode={}.",
             inst,
             domain,
             asn.value(),
-            cit->second.hash_domain);
+            cit->second.hash_domain,
+            ScanArchitectConfig::ClockMixingName(config_.getClockMixing()),
+            ScanArchitectConfig::PolarityModeName(config_.getPolarityMode()));
       }
 
       if (!root_chain[root].has_value()) {
