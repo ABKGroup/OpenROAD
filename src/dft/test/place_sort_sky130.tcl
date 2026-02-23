@@ -9,7 +9,7 @@ link_design place_sort
 
 create_clock -name main_clock -period 2.0000 -waveform {0.0000 1.0000} [get_ports {clock}]
 
-set_dft_config -max_length 10
+set_dft_config -max_length 10 -scan_order_solver ILS
 
 scan_replace
 

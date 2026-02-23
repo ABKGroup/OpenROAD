@@ -142,9 +142,20 @@ void dbScanChain::setName(std::string_view name)
 std::variant<dbBTerm*, dbITerm*> _dbScanChain::getPin(
     const dbId<dbScanPin>& scan_pin_id)
 {
+  if (!scan_pin_id.isValid()) {
+    return std::variant<dbBTerm*, dbITerm*>((dbBTerm*) nullptr);
+  }
   _dbDft* dft = (_dbDft*) getOwner();
-  return ((dbScanPin*) dft->scan_pins_->getPtr((dbId<_dbScanPin>) scan_pin_id))
-      ->getPin();
+  if (dft == nullptr || dft->scan_pins_ == nullptr) {
+    return std::variant<dbBTerm*, dbITerm*>((dbBTerm*) nullptr);
+  }
+
+  dbScanPin* scan_pin
+      = (dbScanPin*) dft->scan_pins_->getPtr((dbId<_dbScanPin>) scan_pin_id);
+  if (scan_pin == nullptr) {
+    return std::variant<dbBTerm*, dbITerm*>((dbBTerm*) nullptr);
+  }
+  return scan_pin->getPin();
 }
 
 void _dbScanChain::setPin(dbId<dbScanPin> _dbScanChain::*field, dbBTerm* pin)

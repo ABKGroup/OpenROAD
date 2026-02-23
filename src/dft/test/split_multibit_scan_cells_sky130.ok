@@ -1,0 +1,26 @@
+[INFO ODB-0227] LEF file: sky130hd/sky130hd.tlef, created 13 layers, 25 vias
+[INFO ODB-0227] LEF file: split_multibit_scan_cells_sky130.lef, created 1 library cells
+[INFO ODB-0128] Design: split_multibit_scan_cells
+[INFO ODB-0130]     Created 1 pins.
+[INFO ODB-0131]     Created 1 components and 10 component-terminals.
+[INFO ODB-0133]     Created 1 nets and 1 connections.
+[WARNING DFT-0212] Scan constraints: endpoint port 'scan_in_0' not found; ignoring endpoint.
+[WARNING DFT-0212] Scan constraints: endpoint port 'scan_out_0' not found; ignoring endpoint.
+***************************
+Report DFT Plan
+Number of chains: 1
+Clock domain: No Mix
+***************************
+
+Scan chain 'chain_0' has 2 cells (2 bits)
+
+  mbff1__dft_scanbit0 (main_clock, rising)
+  mbff1__dft_scanbit1
+
+
+[WARNING DFT-0212] Scan constraints: endpoint port 'scan_in_0' not found; ignoring endpoint.
+[WARNING DFT-0212] Scan constraints: endpoint port 'scan_out_0' not found; ignoring endpoint.
+[WARNING DFT-0226] Scan chain 'chain_0' scan-in port 'scan_in_0' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
+[WARNING DFT-0230] Scan chain 'chain_0' scan-out port 'scan_out_0' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
+[INFO DFT-0268] Wrote scan chains to 'split_multibit_scan_cells_sky130.scandef'
+No differences found.

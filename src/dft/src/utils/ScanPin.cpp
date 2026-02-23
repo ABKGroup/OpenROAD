@@ -31,6 +31,26 @@ std::string_view ScanPin::getName() const
       value_);
 }
 
+odb::Point ScanPin::getLocation(const odb::Point& fallback) const
+{
+  return std::visit(
+      overloaded{[&](odb::dbITerm* iterm) -> odb::Point {
+                   if (iterm == nullptr) {
+                     return fallback;
+                   }
+                   const odb::Rect bbox = iterm->getBBox();
+                   return odb::Point(bbox.xMin(), bbox.yMin());
+                 },
+                 [&](odb::dbBTerm* bterm) -> odb::Point {
+                   if (bterm == nullptr) {
+                     return fallback;
+                   }
+                   const odb::Rect bbox = bterm->getBBox();
+                   return odb::Point(bbox.xMin(), bbox.yMin());
+                 }},
+      value_);
+}
+
 const std::variant<odb::dbBTerm*, odb::dbITerm*>& ScanPin::getValue() const
 {
   return value_;

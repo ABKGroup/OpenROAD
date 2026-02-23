@@ -54,6 +54,11 @@ ScanDriver ScanCellMock::getScanOut() const
   return ScanDriver(static_cast<odb::dbBTerm*>(nullptr));
 }
 
+odb::dbInst* ScanCellMock::getDbInst() const
+{
+  return nullptr;
+}
+
 odb::Point ScanCellMock::getOrigin() const
 {
   return odb::Point();
@@ -61,7 +66,7 @@ odb::Point ScanCellMock::getOrigin() const
 
 bool ScanCellMock::isPlaced() const
 {
-  return false;
+  return true;
 }
 
 }  // namespace test
