@@ -757,8 +757,6 @@ void ScanStitch::Stitch(odb::dbBlock* block,
 
   const std::vector<std::unique_ptr<ScanCell>>& scan_cells
       = scan_chain.getScanCells();
-
-  std::ranges::copy(original_scan_cells, std::back_inserter(scan_cells));
   if (scan_cells.empty()) {
     return;
   }

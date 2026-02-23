@@ -181,7 +181,7 @@ std::variant<dbBTerm*, dbITerm*> dbScanInst::getScanEnable() const
   if (block == nullptr) {
     return std::variant<dbBTerm*, dbITerm*>((dbBTerm*) nullptr);
   }
-  _dbDft* dft = (_dbDft*) block->_dft_tbl->getPtr(block->_dft);
+  _dbDft* dft = (_dbDft*) block->dft_tbl_->getPtr(block->dft_);
   if (dft == nullptr || dft->scan_pins_ == nullptr) {
     return std::variant<dbBTerm*, dbITerm*>((dbBTerm*) nullptr);
   }

@@ -33,6 +33,7 @@
 #include "boost/geometry/index/parameters.hpp"
 #include "boost/geometry/index/predicates.hpp"
 #include "boost/geometry/index/rtree.hpp"
+#include "odb/dbShape.h"
 #include "odb/geom.h"
 #include "utl/Logger.h"
 

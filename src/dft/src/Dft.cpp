@@ -85,13 +85,13 @@ std::optional<std::pair<float, float>> computeScanOutTimingSlacks(
   }
 
   const float setup_rise
-      = sta->pinSlack(pin, sta::RiseFall::rise(), sta::MinMax::max());
+      = sta->slack(pin, sta::RiseFallBoth::rise(), sta->scenes(), sta::MinMax::max());
   const float setup_fall
-      = sta->pinSlack(pin, sta::RiseFall::fall(), sta::MinMax::max());
+      = sta->slack(pin, sta::RiseFallBoth::fall(), sta->scenes(), sta::MinMax::max());
   const float hold_rise
-      = sta->pinSlack(pin, sta::RiseFall::rise(), sta::MinMax::min());
+      = sta->slack(pin, sta::RiseFallBoth::rise(), sta->scenes(), sta::MinMax::min());
   const float hold_fall
-      = sta->pinSlack(pin, sta::RiseFall::fall(), sta::MinMax::min());
+      = sta->slack(pin, sta::RiseFallBoth::fall(), sta->scenes(), sta::MinMax::min());
 
   const float setup = std::min(setup_rise, setup_fall);
   const float hold = std::min(hold_rise, hold_fall);
@@ -116,12 +116,9 @@ dft::ClockEdge inferClockEdgeFromLiberty(odb::dbInst* inst,
   }
 
   const sta::SequentialSeq& sequentials = liberty_cell->sequentials();
-  for (const sta::Sequential* sequential : sequentials) {
-    if (sequential == nullptr) {
-      continue;
-    }
-    sta::FuncExpr* clk = sequential->clock();
-    if (clk != nullptr && clk->op() == sta::FuncExpr::op_not) {
+  for (const sta::Sequential& sequential : sequentials) {
+    sta::FuncExpr* clk = sequential.clock();
+    if (clk != nullptr && clk->op() == sta::FuncExpr::Op::not_) {
       return dft::ClockEdge::Falling;
     }
     // Fallback to the legacy check.
@@ -1339,8 +1336,8 @@ std::vector<std::unique_ptr<ScanChain>> Dft::scanArchitectFromDb()
                 && sta::getLibertyScanEnable(liberty_cell) != nullptr) {
               const sta::SequentialSeq& sequentials = liberty_cell->sequentials();
               uint64_t inferred = 0;
-              for (const sta::Sequential* seq : sequentials) {
-                if (seq != nullptr && seq->isRegister()) {
+              for (const sta::Sequential& seq : sequentials) {
+                if (seq.isRegister()) {
                   inferred += 1;
                 }
               }

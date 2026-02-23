@@ -76,7 +76,7 @@ std::optional<SeqNode> makeSeqNode(odb::dbInst* inst,
     return std::nullopt;
   }
 
-  const sta::Sequential* seq = sequentials.front();
+  const sta::Sequential* seq = sequentials.data();
   if (!seq->isRegister()) {
     return std::nullopt;
   }
@@ -85,7 +85,7 @@ std::optional<SeqNode> makeSeqNode(odb::dbInst* inst,
   // a single data input pin. This intentionally skips scan flops where next
   // state is a mux expression over functional + scan pins.
   sta::FuncExpr* data_expr = seq->data();
-  if (data_expr == nullptr || data_expr->op() != sta::FuncExpr::op_port) {
+  if (data_expr == nullptr || data_expr->op() != sta::FuncExpr::Op::port) {
     return std::nullopt;
   }
 
@@ -143,10 +143,10 @@ std::optional<SeqNode> makeSeqNode(odb::dbInst* inst,
     return std::nullopt;
   }
   sta::LibertyPort* clk_port = nullptr;
-  if (clk_expr->op() == sta::FuncExpr::op_port) {
+  if (clk_expr->op() == sta::FuncExpr::Op::port) {
     clk_port = clk_expr->port();
-  } else if (clk_expr->op() == sta::FuncExpr::op_not && clk_expr->left() != nullptr
-             && clk_expr->left()->op() == sta::FuncExpr::op_port) {
+  } else if (clk_expr->op() == sta::FuncExpr::Op::not_ && clk_expr->left() != nullptr
+             && clk_expr->left()->op() == sta::FuncExpr::Op::port) {
     clk_port = clk_expr->left()->port();
   }
   if (clk_port == nullptr) {

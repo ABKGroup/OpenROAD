@@ -333,7 +333,7 @@ std::vector<std::unique_ptr<ScanCell>> CreateOneBitCells(
     if (scan_out_port == nullptr) {
       const sta::SequentialSeq& sequentials = liberty_cell->sequentials();
       if (!sequentials.empty()) {
-        scan_out_port = sequentials.front()->output();
+        scan_out_port = sequentials.front().output();
       }
     }
   }
@@ -349,8 +349,8 @@ std::vector<std::unique_ptr<ScanCell>> CreateOneBitCells(
 
   uint64_t bits_total = 0;
   const sta::SequentialSeq& sequentials = liberty_cell->sequentials();
-  for (const sta::Sequential* seq : sequentials) {
-    if (seq != nullptr && seq->isRegister()) {
+  for (const sta::Sequential& seq : sequentials) {
+    if (seq.isRegister()) {
       bits_total += 1;
     }
   }
@@ -471,14 +471,15 @@ std::optional<std::pair<float, float>> computeScanOutTimingSlacks(
     return std::nullopt;
   }
 
+
   const float setup_rise
-      = sta->pinSlack(pin, sta::RiseFall::rise(), sta::MinMax::max());
+      = sta->slack(pin, sta::RiseFallBoth::rise(), sta->scenes(), sta::MinMax::max());
   const float setup_fall
-      = sta->pinSlack(pin, sta::RiseFall::fall(), sta::MinMax::max());
+      = sta->slack(pin, sta::RiseFallBoth::fall(), sta->scenes(), sta::MinMax::max());
   const float hold_rise
-      = sta->pinSlack(pin, sta::RiseFall::rise(), sta::MinMax::min());
+      = sta->slack(pin, sta::RiseFallBoth::rise(), sta->scenes(), sta::MinMax::min());
   const float hold_fall
-      = sta->pinSlack(pin, sta::RiseFall::fall(), sta::MinMax::min());
+      = sta->slack(pin, sta::RiseFallBoth::fall(), sta->scenes(), sta::MinMax::min());
 
   const float setup = std::min(setup_rise, setup_fall);
   const float hold = std::min(hold_rise, hold_fall);
