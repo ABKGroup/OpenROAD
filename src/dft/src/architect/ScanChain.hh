@@ -37,6 +37,10 @@ class ScanChain
   // move the cell to rising or falling vectors.
   void add(std::unique_ptr<ScanCell> scan_cell);
 
+  // Adds a scan cell to the chain preserving insertion order (used for
+  // user-defined or imported scan chains).
+  void addOrdered(std::unique_ptr<ScanCell> scan_cell);
+
   // Returns true if the scan chain is empty
   bool empty() const;
 

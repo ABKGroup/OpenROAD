@@ -1,0 +1,4 @@
+[INFO ODB-0227] LEF file: sky130hd/sky130hd.tlef, created 13 layers, 25 vias
+[INFO ODB-0227] LEF file: sky130hd/sky130_fd_sc_hd_merged.lef, created 437 library cells
+[ERROR DFT-0130] Scan architect constraints infeasible: max_length=5 requires at least 4 chains for total_bits=20, but max_chains=3.
+Caught expected error: DFT-0130

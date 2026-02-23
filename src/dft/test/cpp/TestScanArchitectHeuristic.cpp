@@ -1,6 +1,10 @@
+#include <chrono>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -18,6 +22,46 @@
 
 namespace dft::test {
 namespace {
+
+class TempConstraintsFile
+{
+ public:
+  explicit TempConstraintsFile(const std::string& contents)
+  {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path();
+    for (int attempt = 0; attempt < 100; ++attempt) {
+      const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+      const std::filesystem::path candidate
+          = dir / ("openroad_dft_constraints_" + std::to_string(stamp) + "_"
+                   + std::to_string(attempt) + ".txt");
+      if (std::filesystem::exists(candidate)) {
+        continue;
+      }
+      std::ofstream f(candidate);
+      if (!f) {
+        throw std::runtime_error("failed to create temp constraints file");
+      }
+      f << contents;
+      f.close();
+      path_ = candidate;
+      return;
+    }
+    throw std::runtime_error("failed to allocate unique temp constraints file");
+  }
+
+  ~TempConstraintsFile()
+  {
+    if (!path_.empty()) {
+      std::error_code ec;
+      std::filesystem::remove(path_, ec);
+    }
+  }
+
+  const std::string path() const { return path_.string(); }
+
+ private:
+  std::filesystem::path path_;
+};
 
 TEST(TestScanArchitectHeuristic, ArchitectWithOneClockDomainNoMix)
 {
@@ -77,6 +121,9 @@ TEST(TestScanArchitectHeuristic, ArchitectWithTwoClockDomainNoMix)
   ScanArchitectConfig config;
   config.setClockMixing(ScanArchitectConfig::ClockMixing::NoMix);
   config.setMaxLength(10);
+  // This test focuses on clock-domain partitioning + max_length packing.
+  // Disable default length-balancing (max_imbalance) to keep expectations stable.
+  config.setMaxImbalancePercent(1000.0);
   std::vector<std::unique_ptr<ScanCell>> scan_cells;
   std::vector<std::string> scan_cell_names;
 
@@ -134,6 +181,9 @@ TEST(TestScanArchitectHeuristic, ArchitectWithTwoEdgesNoMix)
   ScanArchitectConfig config;
   config.setClockMixing(ScanArchitectConfig::ClockMixing::NoMix);
   config.setMaxLength(10);
+  // This test focuses on edge (polarity) partitioning + max_length packing.
+  // Disable default length-balancing (max_imbalance) to keep expectations stable.
+  config.setMaxImbalancePercent(1000.0);
   std::vector<std::unique_ptr<ScanCell>> scan_cells;
   std::vector<std::string> scan_cell_names;
 
@@ -191,6 +241,263 @@ TEST(TestScanArchitectHeuristic, ArchitectWithTwoEdgesNoMix)
   }
   EXPECT_EQ(total_bits_rising, 20);
   EXPECT_EQ(total_bits_falling, 15);
+}
+
+TEST(TestScanArchitectHeuristic, ChainNamesCountMismatchThrows)
+{
+  utl::Logger* logger = new utl::Logger();
+
+  ScanArchitectConfig config;
+  config.setClockMixing(ScanArchitectConfig::ClockMixing::ClockMix);
+  config.setChainCount(2);
+  config.setMaxLength(10);
+
+  TempConstraintsFile constraints("chain c0\n");
+  ASSERT_TRUE(config.loadScanOrderConstraintsFile(constraints.path(), logger));
+
+  std::vector<std::unique_ptr<ScanCell>> scan_cells;
+  for (int i = 0; i < 4; ++i) {
+    scan_cells.push_back(std::make_unique<ScanCellMock>(
+        "scan_cell" + std::to_string(i),
+        std::make_unique<ClockDomain>("clk", ClockEdge::Rising),
+        logger));
+  }
+
+  std::unique_ptr<ScanCellsBucket> scan_cells_bucket
+      = std::make_unique<ScanCellsBucket>(logger);
+  scan_cells_bucket->init(config, scan_cells);
+
+  std::unique_ptr<ScanArchitect> scan_architect
+      = ScanArchitect::ConstructScanScanArchitect(
+          config, std::move(scan_cells_bucket), logger);
+
+  EXPECT_THROW(scan_architect->init(), std::runtime_error);
+}
+
+TEST(TestScanArchitectHeuristic, ChainNamesDuplicateThrows)
+{
+  utl::Logger* logger = new utl::Logger();
+
+  ScanArchitectConfig config;
+  TempConstraintsFile constraints("chain c0\nchain c0\n");
+
+  EXPECT_THROW(config.loadScanOrderConstraintsFile(constraints.path(), logger),
+               std::runtime_error);
+}
+
+TEST(TestScanArchitectHeuristic, GroupCycleThrows)
+{
+  utl::Logger* logger = new utl::Logger();
+
+  ScanArchitectConfig config;
+  TempConstraintsFile constraints("group A B\ngroup B A\n");
+
+  EXPECT_THROW(config.loadScanOrderConstraintsFile(constraints.path(), logger),
+               std::runtime_error);
+}
+
+TEST(TestScanArchitectHeuristic, UnknownChainAssignmentThrows)
+{
+  utl::Logger* logger = new utl::Logger();
+
+  ScanArchitectConfig config;
+  config.setClockMixing(ScanArchitectConfig::ClockMixing::ClockMix);
+  config.setChainCount(1);
+  config.setMaxLength(10);
+
+  TempConstraintsFile constraints("assign foo scan_cell0\n");
+  ASSERT_TRUE(config.loadScanOrderConstraintsFile(constraints.path(), logger));
+
+  std::vector<std::unique_ptr<ScanCell>> scan_cells;
+  scan_cells.push_back(std::make_unique<ScanCellMock>(
+      "scan_cell0",
+      std::make_unique<ClockDomain>("clk", ClockEdge::Rising),
+      logger));
+
+  std::unique_ptr<ScanCellsBucket> scan_cells_bucket
+      = std::make_unique<ScanCellsBucket>(logger);
+  scan_cells_bucket->init(config, scan_cells);
+
+  std::unique_ptr<ScanArchitect> scan_architect
+      = ScanArchitect::ConstructScanScanArchitect(
+          config, std::move(scan_cells_bucket), logger);
+  scan_architect->init();
+
+  EXPECT_THROW(scan_architect->architect(), std::runtime_error);
+}
+
+TEST(TestScanArchitectHeuristic, ConflictingAssignmentsAcrossGroupThrows)
+{
+  utl::Logger* logger = new utl::Logger();
+
+  ScanArchitectConfig config;
+  config.setClockMixing(ScanArchitectConfig::ClockMixing::ClockMix);
+  config.setChainCount(2);
+  config.setMaxLength(10);
+
+  TempConstraintsFile constraints(
+      "chain c0\n"
+      "chain c1\n"
+      "group g scan_cell0 scan_cell1\n"
+      "assign c0 scan_cell0\n"
+      "assign c1 scan_cell1\n");
+  ASSERT_TRUE(config.loadScanOrderConstraintsFile(constraints.path(), logger));
+
+  std::vector<std::unique_ptr<ScanCell>> scan_cells;
+  scan_cells.push_back(std::make_unique<ScanCellMock>(
+      "scan_cell0",
+      std::make_unique<ClockDomain>("clk", ClockEdge::Rising),
+      logger));
+  scan_cells.push_back(std::make_unique<ScanCellMock>(
+      "scan_cell1",
+      std::make_unique<ClockDomain>("clk", ClockEdge::Rising),
+      logger));
+
+  std::unique_ptr<ScanCellsBucket> scan_cells_bucket
+      = std::make_unique<ScanCellsBucket>(logger);
+  scan_cells_bucket->init(config, scan_cells);
+
+  std::unique_ptr<ScanArchitect> scan_architect
+      = ScanArchitect::ConstructScanScanArchitect(
+          config, std::move(scan_cells_bucket), logger);
+  scan_architect->init();
+
+  EXPECT_THROW(scan_architect->architect(), std::runtime_error);
+}
+
+TEST(TestScanArchitectHeuristic, MaxImbalanceInfeasibleThrows)
+{
+  utl::Logger* logger = new utl::Logger();
+
+  ScanArchitectConfig config;
+  config.setClockMixing(ScanArchitectConfig::ClockMixing::ClockMix);
+  config.setChainCount(2);
+  config.setMaxLength(10);
+  config.setMaxImbalancePercent(0.0);
+
+  std::vector<std::unique_ptr<ScanCell>> scan_cells;
+  for (int i = 0; i < 3; ++i) {
+    scan_cells.push_back(std::make_unique<ScanCellMock>(
+        "scan_cell" + std::to_string(i),
+        std::make_unique<ClockDomain>("clk", ClockEdge::Rising),
+        logger));
+  }
+
+  std::unique_ptr<ScanCellsBucket> scan_cells_bucket
+      = std::make_unique<ScanCellsBucket>(logger);
+  scan_cells_bucket->init(config, scan_cells);
+
+  std::unique_ptr<ScanArchitect> scan_architect
+      = ScanArchitect::ConstructScanScanArchitect(
+          config, std::move(scan_cells_bucket), logger);
+
+  EXPECT_THROW(scan_architect->init(), std::runtime_error);
+}
+
+TEST(TestScanArchitectHeuristic, BeforeConstraintCycleThrows)
+{
+  utl::Logger* logger = new utl::Logger();
+
+  ScanArchitectConfig config;
+  config.setClockMixing(ScanArchitectConfig::ClockMixing::ClockMix);
+  config.setChainCount(1);
+  config.setMaxLength(10);
+
+  TempConstraintsFile constraints(
+      "before scan_cell0 scan_cell1\n"
+      "before scan_cell1 scan_cell0\n");
+  ASSERT_TRUE(config.loadScanOrderConstraintsFile(constraints.path(), logger));
+
+  std::vector<std::unique_ptr<ScanCell>> scan_cells;
+  scan_cells.push_back(std::make_unique<ScanCellMock>(
+      "scan_cell0",
+      std::make_unique<ClockDomain>("clk", ClockEdge::Rising),
+      logger));
+  scan_cells.push_back(std::make_unique<ScanCellMock>(
+      "scan_cell1",
+      std::make_unique<ClockDomain>("clk", ClockEdge::Rising),
+      logger));
+
+  std::unique_ptr<ScanCellsBucket> scan_cells_bucket
+      = std::make_unique<ScanCellsBucket>(logger);
+  scan_cells_bucket->init(config, scan_cells);
+
+  std::unique_ptr<ScanArchitect> scan_architect
+      = ScanArchitect::ConstructScanScanArchitect(
+          config, std::move(scan_cells_bucket), logger);
+  scan_architect->init();
+
+  EXPECT_THROW(scan_architect->architect(), std::runtime_error);
+}
+
+TEST(TestScanArchitectHeuristic, FixedEdgeCycleThrows)
+{
+  utl::Logger* logger = new utl::Logger();
+
+  ScanArchitectConfig config;
+  config.setClockMixing(ScanArchitectConfig::ClockMixing::ClockMix);
+  config.setChainCount(1);
+  config.setMaxLength(10);
+
+  TempConstraintsFile constraints(
+      "fixed_edge scan_cell0 scan_cell1\n"
+      "fixed_edge scan_cell1 scan_cell0\n");
+  ASSERT_TRUE(config.loadScanOrderConstraintsFile(constraints.path(), logger));
+
+  std::vector<std::unique_ptr<ScanCell>> scan_cells;
+  scan_cells.push_back(std::make_unique<ScanCellMock>(
+      "scan_cell0",
+      std::make_unique<ClockDomain>("clk", ClockEdge::Rising),
+      logger));
+  scan_cells.push_back(std::make_unique<ScanCellMock>(
+      "scan_cell1",
+      std::make_unique<ClockDomain>("clk", ClockEdge::Rising),
+      logger));
+
+  std::unique_ptr<ScanCellsBucket> scan_cells_bucket
+      = std::make_unique<ScanCellsBucket>(logger);
+  scan_cells_bucket->init(config, scan_cells);
+
+  std::unique_ptr<ScanArchitect> scan_architect
+      = ScanArchitect::ConstructScanScanArchitect(
+          config, std::move(scan_cells_bucket), logger);
+  scan_architect->init();
+
+  EXPECT_THROW(scan_architect->architect(), std::runtime_error);
+}
+
+TEST(TestScanArchitectHeuristic, PolarityBeforeConstraintThrows)
+{
+  utl::Logger* logger = new utl::Logger();
+
+  ScanArchitectConfig config;
+  config.setClockMixing(ScanArchitectConfig::ClockMixing::ClockMix);
+  config.setChainCount(1);
+  config.setMaxLength(10);
+
+  TempConstraintsFile constraints("before scan_cell0 scan_cell1\n");
+  ASSERT_TRUE(config.loadScanOrderConstraintsFile(constraints.path(), logger));
+
+  std::vector<std::unique_ptr<ScanCell>> scan_cells;
+  scan_cells.push_back(std::make_unique<ScanCellMock>(
+      "scan_cell0",
+      std::make_unique<ClockDomain>("clk", ClockEdge::Rising),
+      logger));
+  scan_cells.push_back(std::make_unique<ScanCellMock>(
+      "scan_cell1",
+      std::make_unique<ClockDomain>("clk", ClockEdge::Falling),
+      logger));
+
+  std::unique_ptr<ScanCellsBucket> scan_cells_bucket
+      = std::make_unique<ScanCellsBucket>(logger);
+  scan_cells_bucket->init(config, scan_cells);
+
+  std::unique_ptr<ScanArchitect> scan_architect
+      = ScanArchitect::ConstructScanScanArchitect(
+          config, std::move(scan_cells_bucket), logger);
+  scan_architect->init();
+
+  EXPECT_THROW(scan_architect->architect(), std::runtime_error);
 }
 
 }  // namespace

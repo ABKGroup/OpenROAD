@@ -30,7 +30,7 @@ class ScanCell
   ScanCell(const std::string& name,
            std::unique_ptr<ClockDomain> clock_domain,
            utl::Logger* logger);
-  virtual ~ScanCell() = default;
+  virtual ~ScanCell();
   // Not copyable or movable
   ScanCell(const ScanCell&) = delete;
   ScanCell& operator=(const ScanCell&) = delete;
@@ -42,9 +42,18 @@ class ScanCell
   virtual ScanLoad getScanEnable() const = 0;
   virtual ScanLoad getScanIn() const = 0;
   virtual ScanDriver getScanOut() const = 0;
+  virtual odb::dbInst* getDbInst() const = 0;
 
   const ClockDomain& getClockDomain() const;
   std::string_view getName() const;
+
+  // Optional timing metadata used for timing-aware scan ordering heuristics.
+  // Values are STA-reported pin slacks (max=setup, min=hold) at the scan-out
+  // driver pin in the current analysis mode.
+  void setTimingSlacks(float setup_slack, float hold_slack);
+  bool hasTimingSlacks() const;
+  float getSetupSlack() const;
+  float getHoldSlack() const;
 
   virtual odb::Point getOrigin() const = 0;
   virtual bool isPlaced() const = 0;
@@ -52,6 +61,9 @@ class ScanCell
  private:
   std::string name_;
   std::unique_ptr<ClockDomain> clock_domain_;
+  bool has_timing_slacks_{false};
+  float setup_slack_{0.0F};
+  float hold_slack_{0.0F};
 
  protected:
   // Top function to connect either dbBTerms or dbITerms

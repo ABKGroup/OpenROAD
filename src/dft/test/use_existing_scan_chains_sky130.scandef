@@ -1,0 +1,58 @@
+VERSION 5.8 ;
+DIVIDERCHAR "/" ;
+BUSBITCHARS "[]" ;
+DESIGN scan_architect ;
+
+SCANCHAINS 4 ;
+
+- chain_0
++ START PIN scan_in_0
++ COMMONSCANPINS ( IN SCD ) ( OUT Q )
++ ORDERED
+  ff9_clk1_rising
+  ff7_clk1_rising
+  ff5_clk1_rising
+  ff3_clk1_rising
+  ff1_clk1_rising
++ PARTITION main_clock1_rising
++ STOP PIN scan_out_0 ;
+
+- chain_1
++ START PIN scan_in_1
++ COMMONSCANPINS ( IN SCD ) ( OUT Q )
++ ORDERED
+  ff10_clk2_rising
+  ff8_clk2_rising
+  ff6_clk2_rising
+  ff4_clk2_rising
+  ff2_clk2_rising
++ PARTITION main_clock2_rising
++ STOP PIN scan_out_1 ;
+
+- chain_2
++ START PIN scan_in_2
++ COMMONSCANPINS ( IN SCD ) ( OUT Q )
++ ORDERED
+  ff9_clk1_falling
+  ff7_clk1_falling
+  ff5_clk1_falling
+  ff3_clk1_falling
+  ff1_clk1_falling
++ PARTITION main_clock1_falling
++ STOP PIN scan_out_2 ;
+
+- chain_3
++ START PIN scan_in_3
++ COMMONSCANPINS ( IN SCD ) ( OUT Q )
++ ORDERED
+  ff10_clk2_falling
+  ff8_clk2_falling
+  ff6_clk2_falling
+  ff4_clk2_falling
+  ff2_clk2_falling
++ PARTITION main_clock2_falling
++ STOP PIN scan_out_3 ;
+
+END SCANCHAINS
+END DESIGN
+

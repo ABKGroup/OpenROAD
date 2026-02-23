@@ -5,6 +5,7 @@
 
 #include <memory>
 #include <vector>
+#include <string>
 
 #include "db_sta/dbSta.hh"
 #include "odb/db.h"
@@ -60,6 +61,14 @@ class Dft
   // chains
   void reportDftPlan(bool verbose);
 
+  // Reports the scan plan in a machine-parseable format that includes scan
+  // pin locations (scan-in and scan-out) for each scan cell.
+  //
+  // This is intended for tooling/visualization to match the scan ordering
+  // objective, which is defined on scan pin locations rather than instance
+  // origins.
+  void reportDftPlanPins(bool verbose);
+
   // Inserts the scan chains into the design. For now this just replace the
   // cells in the design with scan equivalent. This functions mutates the
   // design.
@@ -78,6 +87,16 @@ class Dft
   //  - Store the inserted DFT (scan chains) into odb for later optimization
   void executeDftPlan();
 
+  // Writes a SCANDEF/DEF-style SCANCHAINS section (for ATPG/external tools)
+  // based on the scan chains stored in the database by execute_dft_plan.
+  void writeScandef(const std::string& path) const;
+
+  // Buffers/splits the scan enable net to reduce fanout.
+  // Returns the number of inserted buffers.
+  int bufferScanEnable(const std::string& buffer_cell,
+                       int max_fanout,
+                       int max_levels);
+
   // Returns a mutable version of DftConfig
   DftConfig* getMutableDftConfig();
 
@@ -94,12 +113,25 @@ class Dft
   // If we need to run pre_dft to create the internal state
   bool need_to_run_pre_dft_{true};
 
+  // Cache for automatic exclusions (e.g., shift-register detection) so we don't
+  // repeatedly re-scan the netlist during a flow.
+  bool auto_exclusions_cache_valid_{false};
+  bool cached_auto_exclude_shift_registers_{false};
+  int cached_shift_register_min_length_{0};
+
   // Resets the internal state
   void reset();
 
   // Common function to perform scan replace and scan architect. Shared between
   // report_dft_plan and execute_dft_plan
   std::vector<std::unique_ptr<ScanChain>> scanArchitect();
+
+  // Uses scan chains already stored in ODB (e.g. imported SCANDEF) as the scan
+  // plan.
+  std::vector<std::unique_ptr<ScanChain>> scanArchitectFromDb();
+
+  // Applies any enabled automatic exclusions (e.g., shift-register detection).
+  void applyAutoExclusions();
 
   // Global state
   odb::dbDatabase* db_;
