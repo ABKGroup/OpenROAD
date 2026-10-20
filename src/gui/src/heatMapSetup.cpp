@@ -12,13 +12,14 @@
 #include <QString>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <string>
 #include <variant>
 
-#include "gui/heatMap.h"
+#include "web/heatMap.h"
 
 namespace gui {
 
-HeatMapSetup::HeatMapSetup(HeatMapDataSource& source,
+HeatMapSetup::HeatMapSetup(web::HeatMapDataSource& source,
                            const QString& title,
                            bool use_dbu,
                            int dbu,
@@ -40,6 +41,7 @@ HeatMapSetup::HeatMapSetup(HeatMapDataSource& source,
       max_range_selector_(new QDoubleSpinBox(this)),
       show_maxs_(new QCheckBox(this)),
       alpha_selector_(new QSpinBox(this)),
+      use_selected_only_(new QCheckBox(this)),
       rebuild_(new QPushButton("Rebuild data", this)),
       close_(new QPushButton("Close", this))
 {
@@ -49,13 +51,15 @@ HeatMapSetup::HeatMapSetup(HeatMapDataSource& source,
   QFormLayout* form = new QFormLayout;
 
   for (const auto& option : source_.getMapSettings()) {
-    if (std::holds_alternative<HeatMapDataSource::MapSettingBoolean>(option)) {
-      addBooleanOption(form,
-                       std::get<HeatMapDataSource::MapSettingBoolean>(option));
-    } else if (std::holds_alternative<HeatMapDataSource::MapSettingMultiChoice>(
-                   option)) {
+    if (std::holds_alternative<web::HeatMapDataSource::MapSettingBoolean>(
+            option)) {
+      addBooleanOption(
+          form, std::get<web::HeatMapDataSource::MapSettingBoolean>(option));
+    } else if (std::holds_alternative<
+                   web::HeatMapDataSource::MapSettingMultiChoice>(option)) {
       addMultiChoiceOption(
-          form, std::get<HeatMapDataSource::MapSettingMultiChoice>(option));
+          form,
+          std::get<web::HeatMapDataSource::MapSettingMultiChoice>(option));
     }
   }
 
@@ -65,6 +69,11 @@ HeatMapSetup::HeatMapSetup(HeatMapDataSource& source,
   form->addRow(tr("Show numbers"), show_numbers_);
 
   form->addRow(tr("Show legend"), show_legend_);
+
+  const std::string selection_filter_label = source_.getSelectionFilterLabel();
+  if (!selection_filter_label.empty()) {
+    form->addRow(tr(selection_filter_label.c_str()), use_selected_only_);
+  }
 
   QHBoxLayout* grid_layout = new QHBoxLayout;
   if (!use_dbu_) {
@@ -195,6 +204,11 @@ HeatMapSetup::HeatMapSetup(HeatMapDataSource& source,
           this,
           &HeatMapSetup::updateAlpha);
 
+  connect(use_selected_only_,
+          &QCheckBox::stateChanged,
+          this,
+          &HeatMapSetup::updateUseSelectedOnly);
+
   connect(this, &HeatMapSetup::changed, this, &HeatMapSetup::updateWidgets);
 
   connect(rebuild_, &QPushButton::pressed, this, &HeatMapSetup::destroyMap);
@@ -251,6 +265,8 @@ void HeatMapSetup::updateWidgets()
                                                         : Qt::Unchecked);
   show_legend_->setCheckState(source_.getShowLegend() ? Qt::Checked
                                                       : Qt::Unchecked);
+  use_selected_only_->setCheckState(source_.useSelectedOnly() ? Qt::Checked
+                                                              : Qt::Unchecked);
 }
 
 void HeatMapSetup::destroyMap()
@@ -320,9 +336,15 @@ void HeatMapSetup::updateAlpha(int alpha)
   emit changed();
 }
 
+void HeatMapSetup::updateUseSelectedOnly(int option)
+{
+  source_.setUseSelectedOnly(option == Qt::Checked);
+  emit changed();
+}
+
 void HeatMapSetup::addBooleanOption(
     QFormLayout* layout,
-    const HeatMapDataSource::MapSettingBoolean& option)
+    const web::HeatMapDataSource::MapSettingBoolean& option)
 {
   QCheckBox* check_box = new QCheckBox(this);
   check_box->setCheckState(option.getter() ? Qt::Checked : Qt::Unchecked);
@@ -339,7 +361,7 @@ void HeatMapSetup::addBooleanOption(
 
 void HeatMapSetup::addMultiChoiceOption(
     QFormLayout* layout,
-    const HeatMapDataSource::MapSettingMultiChoice& option)
+    const web::HeatMapDataSource::MapSettingMultiChoice& option)
 {
   QComboBox* combo_box = new QComboBox(this);
   for (const auto& value : option.choices()) {

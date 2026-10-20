@@ -16,13 +16,12 @@ ChipletInst:
     external:
       verilog_file: "soc.v"
       sdc_file: "/path/to/soc.sdc"
-      def_file: "/path/to/soc.def"
+      def_file: ../fake_macros.def
   soc_inst_duplicate:
     reference: SoC
     external:
       verilog_file: "soc.v"
       sdc_file: "/path/to/soc.sdc"
-      def_file: "/path/to/soc.def"
 
 Stack:
   soc_inst:
@@ -40,6 +39,6 @@ Connection:
     bot: soc_inst.regions.front_reg
     thickness: 0.0
   soc_to_virtual:
-    top: soc_inst_duplicate.regions.back_reg
+    top: soc_inst.regions.back_reg
     bot: ~
     thickness: 0.0

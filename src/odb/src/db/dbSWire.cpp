@@ -134,6 +134,12 @@ dbNet* dbSWire::getNet()
   return (dbNet*) block->net_tbl_->getPtr(wire->net_);
 }
 
+void dbSWire::setWireType(dbWireType type)
+{
+  _dbSWire* wire = (_dbSWire*) this;
+  wire->flags_.wire_type = type.getValue();
+}
+
 dbWireType dbSWire::getWireType()
 {
   _dbSWire* wire = (_dbSWire*) this;
@@ -197,6 +203,7 @@ static void destroySBoxes(_dbSWire* wire)
     block->sbox_tbl_->destroy(box);
     id = nid;
   }
+  block->flags_.valid_bbox = 0;
   for (auto callback : block->callbacks_) {
     callback->inDbSWirePostDestroySBoxes((dbSWire*) wire);
   }

@@ -17,6 +17,10 @@
 #include <thread>
 #include <vector>
 
+#if TCL_MAJOR_VERSION < 9 && !defined(Tcl_Size)
+  typedef int Tcl_Size;
+#endif
+
 ////////////////////////////////////////////////////////////////
 //
 // C++ helper functions used by the interface functions.
@@ -35,13 +39,24 @@ using odb::dbDatabase;
 OpenRoad *
 getOpenRoad()
 {
-  return OpenRoad::openRoad();
+  // From Python the current instance is the one set by the most recently
+  // created Tech, and destroying that Tech clears it even if older ones
+  // are still alive.
+  OpenRoad *openroad = OpenRoad::openRoad();
+  if (openroad == nullptr) {
+    utl::Logger::defaultLogger()->error(
+        utl::ORD, 105, "No current OpenROAD instance; create a Tech and keep it alive.");
+  }
+  return openroad;
 }
 
 utl::Logger *
 getLogger()
 {
-  return OpenRoad::openRoad()->getLogger();
+  // Python can log before any Tech exists; use the default logger then.
+  OpenRoad *openroad = OpenRoad::openRoad();
+  return openroad != nullptr ? openroad->getLogger()
+                             : utl::Logger::defaultLogger();
 }
 
 dbDatabase *
@@ -249,13 +264,13 @@ using odb::dbTech;
 }
 
 %typemap(in) vector<const char*> * {
-  int argc;
+  Tcl_Size argc;
   Tcl_Obj **argv;
 
   if (Tcl_ListObjGetElements(interp, $input, &argc, &argv) == TCL_OK) {
     vector<const char*>* seq = new vector<const char*>;
-    for (int i = 0; i < argc; i++) {
-      int length;
+    for (Tcl_Size i = 0; i < argc; i++) {
+      Tcl_Size length;
       const char* str = Tcl_GetStringFromObj(argv[i], &length);
       seq->push_back(str);
     }
@@ -267,7 +282,7 @@ using odb::dbTech;
 }
 
 %typemap(in) utl::ToolId {
-  int length;
+  Tcl_Size length;
   const char *arg = Tcl_GetStringFromObj($input, &length);
   $1 = utl::Logger::findToolId(arg);
 }
@@ -412,10 +427,14 @@ read_db_cmd(const char *filename, bool hierarchy)
 }
 
 void
-write_db_cmd(const char *filename)
+write_db_cmd(const char *filename, int compression_level = -1)
 {
   OpenRoad *ord = getOpenRoad();
-  ord->writeDb(filename);
+  std::optional<int> comp_level;
+  if (compression_level != -1) {
+    comp_level = compression_level;
+  }
+  ord->writeDb(filename, comp_level);
 }
 
 void
@@ -586,22 +605,19 @@ namespace ord {
 void
 set_thread_count(int threads)
 {
-  OpenRoad *ord = getOpenRoad();
-  ord->setThreadCount(threads);
+  getOpenRoad()->setThreadCount(threads);
 }
 
 void
 set_thread_count(const char* threads)
 {
-  OpenRoad *ord = getOpenRoad();
-  ord->setThreadCount(threads);
+  getOpenRoad()->setThreadCount(threads);
 }
 
 int
 thread_count()
 {
-  OpenRoad *ord = getOpenRoad();
-  return ord->getThreadCount();
+  return getOpenRoad()->getThreadCount();
 }
 
 int
@@ -644,6 +660,17 @@ void report_hpwl()
   w.reportHpwl(getLogger());
 }
 
+void report_design_area_metrics_cmd()
+{
+  dbDatabase* db = OpenRoad::openRoad()->getDb();
+  odb::dbChip* chip = db->getChip();
+  if (chip == nullptr) {
+    return;
+  }
+  dbBlock* block = chip->getBlock();
+  odb::blockMetrics(block, getLogger());
 }
+
+} // namespace ord
 
 %} // inline

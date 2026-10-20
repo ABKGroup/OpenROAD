@@ -47,8 +47,6 @@ if (Qt5_FOUND AND BUILD_GUI)
     src/findDialog.cpp
     src/gotoDialog.cpp
     src/inspector.cpp
-    src/dbDescriptors.cpp
-    src/staDescriptors.cpp
     src/highlightGroupDialog.cpp
     src/selectHighlightWindow.cpp
     src/staGui.cpp
@@ -60,17 +58,13 @@ if (Qt5_FOUND AND BUILD_GUI)
     src/label.cpp
     src/heatMap.cpp
     src/heatMapSetup.cpp
-    src/heatMapPinDensity.cpp
-    src/heatMapPlacementDensity.cpp
     src/browserWidget.cpp
     src/globalConnectDialog.cpp
     src/insertBufferDialog.cpp
+    src/qtDialogs.cpp
     src/clockWidget.cpp
     src/gui_utils.cpp
-    src/colorGenerator.cpp
-    src/bufferTreeDescriptor.cpp
     src/chartsWidget.cpp
-    src/chiplet3DWidget.cpp
     src/GUIProgress.cpp
     src/dropdownCheckboxes.cpp
     resources/resource.qrc
@@ -85,6 +79,8 @@ if (Qt5_FOUND AND BUILD_GUI)
       Qt5::Widgets
       Qt5::Charts
       OpenGL::GL
+      gui_core
+      dbSta
       utl_lib
       Boost::boost
       OpenSTA
@@ -105,20 +101,25 @@ messages(
 else()
   if(BUILD_GUI)
     message(STATUS "QT5 not found. GUI is disabled")
+    set(BUILD_GUI OFF CACHE BOOL "Build the GUI" FORCE)
   else()
     message(STATUS "GUI is not enabled")
   endif()
   add_library(gui
-    src/stub.cpp
-    src/stub_heatMap.cpp
+    src/makeGui.cpp
   )
   target_link_libraries(gui
     PUBLIC
       odb
+    PRIVATE
+      gui_core
+      dbSta
+      utl_lib
+      OpenSTA
   )
   target_include_directories(gui
     PRIVATE
-      ${OPENROAD_HOME}/third-party/gif-h
+      ${OPENROAD_HOME}
   )
 endif()
 
@@ -128,7 +129,7 @@ target_include_directories(gui
   PRIVATE
     ${OPENSTA_HOME}/include
     ${DBSTA_HOME}/include
-    ${OPENROAD_HOME}/third-party/gif-h
+    ${OPENROAD_HOME}
 )
 
 add_subdirectory(test)

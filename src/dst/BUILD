@@ -4,6 +4,7 @@
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//bazel:tcl_encode_or.bzl", "tcl_encode")
 load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+load("//test:regression.bzl", "messages_txt")
 
 package(
     default_visibility = ["//:__subpackages__"],
@@ -11,18 +12,14 @@ package(
 )
 
 cc_library(
-    name = "dst",
+    name = "dst_impl",
     srcs = [
         "src/BalancerConnection.cc",
-        "src/BalancerConnection.h",
         "src/Distributed.cc",
         "src/JobMessage.cc",
         "src/LoadBalancer.cc",
-        "src/LoadBalancer.h",
         "src/Worker.cc",
-        "src/Worker.h",
         "src/WorkerConnection.cc",
-        "src/WorkerConnection.h",
     ],
     hdrs = [
         "include/dst/BalancerJobDescription.h",
@@ -30,13 +27,21 @@ cc_library(
         "include/dst/Distributed.h",
         "include/dst/JobCallBack.h",
         "include/dst/JobMessage.h",
+        "src/BalancerConnection.h",
+        "src/LoadBalancer.h",
+        "src/Worker.h",
+        "src/WorkerConnection.h",
     ],
     includes = [
         "include",
+        "src",
+    ],
+    visibility = [
+        "//src/dst:__subpackages__",
     ],
     deps = [
-        "//src/odb",
         "//src/utl",
+        "@abseil-cpp//absl/base:core_headers",
         "@abseil-cpp//absl/synchronization",
         "@boost.asio",
         "@boost.bind",
@@ -50,9 +55,27 @@ cc_library(
 )
 
 cc_library(
+    name = "dst",
+    hdrs = [
+        "include/dst/BalancerJobDescription.h",
+        "include/dst/BroadcastJobDescription.h",
+        "include/dst/Distributed.h",
+        "include/dst/JobCallBack.h",
+        "include/dst/JobMessage.h",
+    ],
+    includes = [
+        "include",
+    ],
+    deps = [
+        ":dst_impl",
+        "@boost.asio",
+        "@boost.serialization",
+    ],
+)
+
+cc_library(
     name = "ui",
     srcs = [
-        "include/dst/Distributed.h",
         "src/MakeDistributed.cc",
         ":swig",
         ":tcl",
@@ -64,10 +87,9 @@ cc_library(
         "include",
     ],
     deps = [
+        ":dst_impl",
         "//:ord",
-        "//src/odb",
         "//src/utl",
-        "@boost.asio",
         "@boost.stacktrace",
         "@tcl_lang//:tcl",
     ],
@@ -97,4 +119,8 @@ tcl_wrap_cc(
     deps = [
         "//src/odb:swig",
     ],
+)
+
+messages_txt(
+    visibility = ["//docs:__pkg__"],
 )

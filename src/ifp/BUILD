@@ -2,9 +2,10 @@
 # Copyright (c) 2025, The OpenROAD Authors
 
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
-load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
+load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
 load("//bazel:tcl_encode_or.bzl", "tcl_encode")
 load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+load("//test:regression.bzl", "messages_txt")
 
 package(
     default_visibility = ["//:__subpackages__"],
@@ -23,9 +24,8 @@ cc_library(
         "include",
     ],
     deps = [
-        "//src/dbSta",
         "//src/dbSta:dbNetwork",
-        "//src/odb",
+        "//src/odb/src/db",
         "//src/sta:opensta_lib",
         "//src/upf",
         "//src/utl",
@@ -35,7 +35,6 @@ cc_library(
 cc_library(
     name = "ui",
     srcs = [
-        "include/ifp/InitFloorplan.hh",
         "src/MakeInitFloorplan.cc",
         ":swig",
         ":tcl",
@@ -43,18 +42,15 @@ cc_library(
     hdrs = [
         "include/ifp/MakeInitFloorplan.hh",
     ],
-    copts = [
-        "-Isrc/ifp/src",
-    ],
     includes = [
         "include",
+        "src",
     ],
     deps = [
+        ":ifp",
         "//:ord",
         "//src/dbSta",
-        "//src/gui",
-        "//src/odb",
-        "//src/sta:opensta_lib",
+        "//src/odb/src/db",
         "//src/utl",
         "@boost.stacktrace",
         "@tcl_lang//:tcl",
@@ -103,4 +99,26 @@ python_wrap_cc(
     deps = [
         "//src/odb:swig-py",
     ],
+)
+
+filegroup(
+    name = "doc_files",
+    srcs = [
+        "README.md",
+        "src/InitFloorplan.tcl",
+    ],
+    visibility = ["//src/ifp/test:__pkg__"],
+)
+
+messages_txt(
+    visibility = [
+        "//docs:__pkg__",
+        "//src/ifp/test:__pkg__",
+    ],
+)
+
+python_wrap_library(
+    name = "py_wrap",
+    includes = ["src"],
+    deps = [":ifp"],
 )

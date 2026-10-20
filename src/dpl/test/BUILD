@@ -1,8 +1,9 @@
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+load("@rules_python//python:defs.bzl", "py_test")
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2022-2025, The OpenROAD Authors
 
-load("@rules_cc//cc:cc_test.bzl", "cc_test")
-load("//test:regression.bzl", "regression_test")
+load("//test:regression.bzl", "doc_check_test", "regression_test")
 
 package(features = ["layering_check"])
 
@@ -10,8 +11,11 @@ package(features = ["layering_check"])
 COMPULSORY_TESTS = [
     "aes",
     "blockage01",
+    "blocked_via_layers",
+    "blocked_via_pins",
     "cell_on_block1",
     "cell_on_block2",
+    "centered_floorplan",
     "check1",
     "check2",
     "check3",
@@ -21,6 +25,12 @@ COMPULSORY_TESTS = [
     "check7",
     "check8",
     "check9",
+    "check_fixed_only",
+    "check_placeable_only",
+    "diamond01",
+    "diamond_multi_height",
+    "diamond_one_site_gap",
+    "diamond_regions",
     "fence01",
     "fence02",
     "fence03",
@@ -36,6 +46,8 @@ COMPULSORY_TESTS = [
     "fillers9",
     "fillers9_verbose",
     "fillers10",
+    "fillers11",
+    "fillers12",
     "fragmented_row01",
     "fragmented_row02",
     "fragmented_row03",
@@ -44,11 +56,14 @@ COMPULSORY_TESTS = [
     "hybrid_cells",
     "hybrid_cells2",
     "ibex",
+    "macro_placed_not_fixed",
     "max_disp1",
     "mirror1",
     "mirror2",
     "mirror3",
+    "mirror_edge_spacing",
     "multi_height_one_site_gap_disallow",
+    "multi_height_power_align",
     "multi_height_rows",
     "obstruction1",
     "obstruction2",
@@ -66,6 +81,7 @@ COMPULSORY_TESTS = [
     "regions2",
     "regions3",
     "report_failures",
+    "row_boundary_filter",
     "simple01",
     "simple02",
     "simple03",
@@ -80,6 +96,7 @@ COMPULSORY_TESTS = [
     "blockage1-opt",
     "gcd-opt",
     "gcd_no_one_site_gaps-opt",
+    "gcd_no_one_site_sanity",
     "ibex-opt",
     "multi_height1-opt",
     "edge_spacing-opt",
@@ -87,18 +104,13 @@ COMPULSORY_TESTS = [
     "regions2-opt",
 ]
 
-# Disabled in CMakeLists.txt
-MANUAL_TESTS = [
-    "dpl_man_tcl_check",
-    "dpl_readme_msgs_check",
-]
-
-ALL_TESTS = COMPULSORY_TESTS + MANUAL_TESTS
+ALL_TESTS = COMPULSORY_TESTS
 
 filegroup(
     name = "regression_resources",
     srcs = [
         "Nangate45/Nangate45.lef",
+        "Nangate45/Nangate45_typ.lib",
         "helpers.tcl",
     ],
 )
@@ -117,6 +129,14 @@ filegroup(
             "blockage1-opt": [
                 "sky130hd/sky130hd.tlef",
                 "sky130hd/sky130hd_std_cell.lef",
+            ],
+            "blocked_via_layers": [
+                "asap7/asap7_tech_1x_201209.lef",
+                "asap7/asap7sc7p5t_28_R_1x_220121a.lef",
+            ],
+            "blocked_via_pins": [
+                "asap7/asap7_tech_1x_201209.lef",
+                "asap7/asap7sc7p5t_28_R_1x_220121a.lef",
             ],
             "cell_on_block1": [
                 "block2.lef",
@@ -145,6 +165,26 @@ filegroup(
             "check9": [
                 "extra.lef",
             ],
+            "check_fixed_only": [
+                "extra.lef",
+            ],
+            "check_placeable_only": [
+                "check_fixed_only.def",
+                "extra.lef",
+            ],
+            "diamond01": [
+                "gcd_replace.def",
+            ],
+            "diamond_multi_height": [
+                "Nangate45/fake_macros.lef",
+                "multi_height_rows.def",
+            ],
+            "diamond_one_site_gap": [
+                "one_site_gap_disallow.def",
+            ],
+            "diamond_regions": [
+                "regions1.def",
+            ],
             "edge_spacing": [
                 "multi_height_rows.def",
                 "Nangate45/fake_macros.lef",
@@ -158,6 +198,10 @@ filegroup(
                 "simple01.def",
             ],
             "fillers10": [
+                "simple09.def",
+                "Nangate45/fakeram45_64x7.lef",
+            ],
+            "fillers11": [
                 "simple09.def",
                 "Nangate45/fakeram45_64x7.lef",
             ],
@@ -195,6 +239,9 @@ filegroup(
             "gcd_no_one_site_gaps-opt": [
                 "Nangate45_data/Nangate45-opt.lef",
             ],
+            "gcd_no_one_site_sanity": [
+                "Nangate45_data/Nangate45-opt.lef",
+            ],
             "hybrid_cells": [
                 "Nangate45/fake_macros.lef",
             ],
@@ -212,6 +259,10 @@ filegroup(
             ],
             "low_util03": [
                 "ibex_core_replace.def",
+            ],
+            "macro_placed_not_fixed": [
+                "block2.lef",
+                "cell_on_block1.def",
             ],
             "max_disp1": [
                 "Nangate45/fakeram45_1024x32.lef",
@@ -237,6 +288,7 @@ filegroup(
                 "Nangate45/fake_macros.lef",
             ],
             "obstruction2": [
+                "Nangate45/fakeram45_64x7.lib",
                 "Nangate45/fakeram45_64x7.lef",
             ],
             "pad01": [
@@ -278,7 +330,7 @@ filegroup(
     regression_test(
         name = test_name,
         data = [":" + test_name + "_resources"],
-        tags = ["manual"] if test_name in MANUAL_TESTS else [],
+        tags = [],
         visibility = ["//visibility:public"],
     )
     for test_name in ALL_TESTS
@@ -287,12 +339,35 @@ filegroup(
 cc_test(
     name = "dpl_unittest",
     srcs = ["dpl_test.cc"],
+    data = ["extra.lef"],
     deps = [
         "//src/dpl",
-        "//src/odb",
+        "//src/odb/src/db",
+        "//src/odb/src/lefin",
         "//src/tst",
+        "//src/tst:nangate45_fixture",
         "//src/utl",
         "@googletest//:gtest",
         "@googletest//:gtest_main",
     ],
+)
+
+py_test(
+    name = "dpl_man_tcl_check",
+    srcs = ["dpl_man_tcl_check.py"],
+    data = ["//src/dpl:doc_files"],
+    tags = [
+        "doc_check",
+        "py",
+    ],
+    deps = ["//docs/src/scripts:extract_utils"],
+)
+
+doc_check_test(
+    name = "dpl_readme_msgs_check",
+    data = [
+        "//src/dpl:doc_files",
+        "//src/dpl:messages_txt",
+    ],
+    visibility = ["//visibility:public"],
 )

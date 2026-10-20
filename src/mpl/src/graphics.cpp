@@ -12,13 +12,13 @@
 #include <vector>
 
 #include "clusterEngine.h"
-#include "gui/gui.h"
 #include "mpl-util.h"
 #include "object.h"
 #include "odb/db.h"
 #include "odb/dbTypes.h"
 #include "odb/geom.h"
 #include "utl/Logger.h"
+#include "web/core.h"
 
 namespace mpl {
 
@@ -36,7 +36,7 @@ Graphics::Graphics(bool coarse,
       block_(block),
       logger_(logger)
 {
-  gui::Gui* gui = gui::Gui::get();
+  web::Gui* gui = web::Gui::get();
   gui->registerRenderer(this);
 
   // Setup the chart
@@ -101,7 +101,7 @@ void Graphics::endSA(const float norm_cost)
   }
   logger_->report("------ End (Iter {}) ------", iter_);
   report(norm_cost);
-  gui::Gui::get()->pause();
+  web::Gui::get()->pause();
 }
 
 bool Graphics::isTargetCluster()
@@ -148,7 +148,7 @@ void Graphics::report(const float norm_cost)
   report(fence_penalty_);
   report(guidance_penalty_);
   report(boundary_penalty_);
-  report(macro_blockage_penalty_);
+  report(soft_blockage_penalty_);
   report(fixed_macros_penalty_);
   report(notch_penalty_);
   report(std::optional<PenaltyData>({"Total", 1.0f, norm_cost, 1.0f}));
@@ -163,8 +163,8 @@ void Graphics::drawResult()
     outlines_ = std::move(outlines);
   }
 
-  gui::Gui::get()->redraw();
-  gui::Gui::get()->pause();
+  web::Gui::get()->redraw();
+  web::Gui::get()->pause();
 }
 
 void Graphics::fetchSoftAndHard(Cluster* parent,
@@ -234,10 +234,10 @@ void Graphics::penaltyCalculated(float norm_cost)
     }
 
     const char* type = !soft_macros_.empty() ? "SoftMacro" : "HardMacro";
-    gui::Gui::get()->status(type);
-    gui::Gui::get()->redraw();
+    web::Gui::get()->status(type);
+    web::Gui::get()->redraw();
     if (norm_cost < 0.99 * best_norm_cost_ || drawing_last_step) {
-      gui::Gui::get()->pause();
+      web::Gui::get()->pause();
     }
     best_norm_cost_ = norm_cost;
 
@@ -257,7 +257,7 @@ void Graphics::resetPenalties()
   fence_penalty_.reset();
   guidance_penalty_.reset();
   boundary_penalty_.reset();
-  macro_blockage_penalty_.reset();
+  soft_blockage_penalty_.reset();
   notch_penalty_.reset();
 }
 
@@ -266,9 +266,9 @@ void Graphics::setNotchPenalty(const PenaltyData& penalty)
   notch_penalty_ = penalty;
 }
 
-void Graphics::setMacroBlockagePenalty(const PenaltyData& penalty)
+void Graphics::setSoftBlockagePenalty(const PenaltyData& penalty)
 {
-  macro_blockage_penalty_ = penalty;
+  soft_blockage_penalty_ = penalty;
 }
 
 void Graphics::setFixedMacrosPenalty(const PenaltyData& penalty)
@@ -326,7 +326,7 @@ void Graphics::setXMarksSize()
   x_mark_size_ = (die.dx() + die.dy()) * 0.02;
 }
 
-void Graphics::drawCluster(Cluster* cluster, gui::Painter& painter)
+void Graphics::drawCluster(Cluster* cluster, web::Painter& painter)
 {
   const int lx = cluster->getX();
   const int ly = cluster->getY();
@@ -341,37 +341,28 @@ void Graphics::drawCluster(Cluster* cluster, gui::Painter& painter)
   }
 }
 
-void Graphics::drawAllBlockages(gui::Painter& painter)
+void Graphics::drawSoftBlockages(web::Painter& painter)
 {
-  if (!macro_blockages_.empty()) {
-    painter.setPen(gui::Painter::kGray, true);
-    painter.setBrush(gui::Painter::kGray, gui::Painter::kDiagonal);
+  if (!soft_blockages_.empty()) {
+    painter.setPen(web::Painter::kGray, true);
+    painter.setBrush(web::Painter::kGray, web::Painter::kDiagonal);
 
-    for (const auto& blockage : macro_blockages_) {
-      drawOffsetRect(blockage, "", painter);
-    }
-  }
-
-  if (!placement_blockages_.empty()) {
-    painter.setPen(gui::Painter::kGreen, true);
-    painter.setBrush(gui::Painter::kGreen, gui::Painter::kDiagonal);
-
-    for (const auto& blockage : placement_blockages_) {
+    for (const auto& blockage : soft_blockages_) {
       drawOffsetRect(blockage, "", painter);
     }
   }
 }
 
-void Graphics::drawFences(gui::Painter& painter)
+void Graphics::drawFences(web::Painter& painter)
 {
   if (fences_.empty()) {
     return;
   }
 
   // slightly transparent dark yellow
-  painter.setBrush(gui::Painter::Color(0x80, 0x80, 0x00, 150),
-                   gui::Painter::kDiagonal);
-  painter.setPen(gui::Painter::kDarkYellow, true);
+  painter.setBrush(web::Painter::Color(0x80, 0x80, 0x00, 150),
+                   web::Painter::kDiagonal);
+  painter.setPen(web::Painter::kDarkYellow, true);
 
   for (const auto& [macro_id, fence] : fences_) {
     drawOffsetRect(fence, std::to_string(macro_id), painter);
@@ -380,7 +371,7 @@ void Graphics::drawFences(gui::Painter& painter)
 
 void Graphics::drawOffsetRect(const odb::Rect& rect,
                               const std::string& center_text,
-                              gui::Painter& painter)
+                              web::Painter& painter)
 {
   odb::Rect movable_rect = rect;
   movable_rect.moveDelta(outline_.xMin(), outline_.yMin());
@@ -389,28 +380,26 @@ void Graphics::drawOffsetRect(const odb::Rect& rect,
   if (!center_text.empty()) {
     painter.drawString(movable_rect.xCenter(),
                        movable_rect.yCenter(),
-                       gui::Painter::kCenter,
+                       web::Painter::kCenter,
                        center_text);
   }
 }
 
 // We draw the shapes of SoftMacros, HardMacros and blockages based
 // on the outline's origin.
-void Graphics::drawObjects(gui::Painter& painter)
+void Graphics::drawObjects(web::Painter& painter)
 {
   if (root_ && !only_final_result_) {
-    painter.setPen(gui::Painter::kRed, true);
-    painter.setBrush(gui::Painter::kTransparent);
+    painter.setPen(web::Painter::kRed, true);
+    painter.setBrush(web::Painter::kTransparent);
     drawCluster(root_, painter);
   }
 
-  // Draw blockages and notches only during SA for SoftMacros
   if (!soft_macros_.empty()) {
-    drawAllBlockages(painter);
-    drawNotches(painter);
+    drawSoftBlockages(painter);
   }
 
-  painter.setPen(gui::Painter::kWhite, true);
+  painter.setPen(web::Painter::kWhite, true);
 
   int i = 0;
   for (const auto& macro : soft_macros_) {
@@ -440,11 +429,11 @@ void Graphics::drawObjects(gui::Painter& painter)
     painter.drawRect(bbox);
     painter.drawString(bbox.xCenter(),
                        bbox.yCenter(),
-                       gui::Painter::kCenter,
+                       web::Painter::kCenter,
                        cluster_id_string);
   }
 
-  painter.setPen(gui::Painter::kWhite, true);
+  painter.setPen(web::Painter::kWhite, true);
 
   i = 0;
   for (const auto& macro : hard_macros_) {
@@ -467,15 +456,15 @@ void Graphics::drawObjects(gui::Painter& painter)
     halo_bbox.moveDelta(outline_.xMin(), outline_.yMin());
     macro_bbox.moveDelta(outline_.xMin(), outline_.yMin());
 
-    painter.setBrush(gui::Painter::kDarkRed);
+    painter.setBrush(web::Painter::kDarkRed);
     painter.drawRect(halo_bbox);
 
-    painter.setBrush(gui::Painter::kRed);
+    painter.setBrush(web::Painter::kRed);
     painter.drawRect(macro_bbox);
 
     painter.drawString(macro_bbox.xCenter(),
                        macro_bbox.yCenter(),
-                       gui::Painter::kCenter,
+                       web::Painter::kCenter,
                        std::to_string(i++));
     switch (macro.getOrientation().getValue()) {
       case odb::dbOrientType::R0: {
@@ -526,11 +515,11 @@ void Graphics::drawObjects(gui::Painter& painter)
 
   drawBlockedRegionsIndication(painter);
 
-  painter.setBrush(gui::Painter::kTransparent);
+  painter.setBrush(web::Painter::kTransparent);
   if (only_final_result_) {
     // Draw all outlines. Same level outlines have the same color.
     for (int level = 0; level < outlines_.size(); ++level) {
-      gui::Painter::Color level_color = gui::Painter::kHighlightColors[level];
+      web::Painter::Color level_color = web::Painter::kHighlightColors[level];
       // Remove transparency
       level_color.a = 255;
 
@@ -541,11 +530,15 @@ void Graphics::drawObjects(gui::Painter& painter)
     }
   } else {
     // Hightlight current outline so we see where SA is working
-    painter.setPen(gui::Painter::kCyan, true);
+    painter.setPen(web::Painter::kCyan, true);
     painter.drawRect(outline_);
 
     drawGuides(painter);
     drawFences(painter);
+  }
+
+  if (!soft_macros_.empty()) {
+    drawNotches(painter);
   }
 }
 
@@ -557,9 +550,9 @@ bool Graphics::isSkippable(const T& macro)
 }
 
 // Draw guidance regions for macros.
-void Graphics::drawGuides(gui::Painter& painter)
+void Graphics::drawGuides(web::Painter& painter)
 {
-  painter.setPen(gui::Painter::kGreen, true);
+  painter.setPen(web::Painter::kGreen, true);
 
   for (const auto& [macro_id, guidance_region] : guides_) {
     odb::Rect guide = guidance_region;
@@ -568,30 +561,30 @@ void Graphics::drawGuides(gui::Painter& painter)
     painter.drawRect(guide);
     painter.drawString(guide.xCenter(),
                        guide.yCenter(),
-                       gui::Painter::Anchor::kCenter,
+                       web::Painter::Anchor::kCenter,
                        std::to_string(macro_id),
                        false /* rotate 90 */);
   }
 }
 
-void Graphics::drawNotches(gui::Painter& painter)
+void Graphics::drawNotches(web::Painter& painter)
 {
-  painter.setPen(gui::Painter::kYellow, true);
+  painter.setPen(web::Painter::kYellow, true);
 
   for (const auto& notch : notches_) {
     odb::Rect rect = notch;
     rect.moveDelta(outline_.xMin(), outline_.yMin());
 
-    painter.setBrush(gui::Painter::kYellow, gui::Painter::kDiagonal);
+    painter.setBrush(web::Painter::kYellow, web::Painter::kDiagonal);
 
     painter.drawRect(rect);
   }
 }
 
-void Graphics::drawBlockedRegionsIndication(gui::Painter& painter)
+void Graphics::drawBlockedRegionsIndication(web::Painter& painter)
 {
-  painter.setPen(gui::Painter::kRed, true);
-  painter.setBrush(gui::Painter::kTransparent);
+  painter.setPen(web::Painter::kRed, true);
+  painter.setBrush(web::Painter::kTransparent);
 
   for (const odb::Rect& region : blocked_regions_for_pins_) {
     painter.drawX(region.xCenter(), region.yCenter(), x_mark_size_);
@@ -599,10 +592,10 @@ void Graphics::drawBlockedRegionsIndication(gui::Painter& painter)
 }
 
 template <typename T>
-void Graphics::drawBundledNets(gui::Painter& painter,
+void Graphics::drawBundledNets(web::Painter& painter,
                                const std::vector<T>& macros)
 {
-  painter.setPen(gui::Painter::kYellow, true);
+  painter.setPen(web::Painter::kYellow, true);
 
   for (const auto& net : nets_) {
     drawBundledNet(painter, macros, net);
@@ -610,7 +603,7 @@ void Graphics::drawBundledNets(gui::Painter& painter,
 }
 
 template <typename T>
-void Graphics::drawBundledNet(gui::Painter& painter,
+void Graphics::drawBundledNet(web::Painter& painter,
                               const std::vector<T>& macros,
                               const BundledNet& net)
 {
@@ -630,7 +623,7 @@ void Graphics::drawBundledNet(gui::Painter& painter,
 }
 
 template <typename T>
-void Graphics::drawDistToRegion(gui::Painter& painter,
+void Graphics::drawDistToRegion(web::Painter& painter,
                                 const T& macro,
                                 const T& io)
 {
@@ -652,7 +645,7 @@ void Graphics::drawDistToRegion(gui::Painter& painter,
   }
 
   painter.drawLine(from, to);
-  painter.drawString(to.getX(), to.getY(), gui::Painter::kCenter, io.getName());
+  painter.drawString(to.getX(), to.getY(), web::Painter::kCenter, io.getName());
 }
 
 template <typename T>
@@ -669,36 +662,29 @@ void Graphics::addOutlineOffsetToLine(odb::Point& from, odb::Point& to)
   to.addY(outline_.yMin());
 }
 
-// Give some transparency to mixed and hard so we can see overlap with
-// macro blockages.
-void Graphics::setSoftMacroBrush(gui::Painter& painter,
+// Give some transparency so we can see the blockages beneath.
+void Graphics::setSoftMacroBrush(web::Painter& painter,
                                  const SoftMacro& soft_macro)
 {
   if (soft_macro.isBlockage()) {
-    painter.setBrush(gui::Painter::kDarkGreen);
+    painter.setBrush(web::Painter::kDarkGreen);
     return;
   }
 
   if (soft_macro.getCluster()->getClusterType() == StdCellCluster) {
-    painter.setBrush(gui::Painter::kDarkBlue);
+    painter.setBrush(web::Painter::Color(0x00, 0x00, 0x80, 150));
   } else if (soft_macro.getCluster()->getClusterType() == HardMacroCluster) {
     // dark red
-    painter.setBrush(gui::Painter::Color(0x80, 0x00, 0x00, 150));
+    painter.setBrush(web::Painter::Color(0x80, 0x00, 0x00, 150));
   } else {
     // dark purple
-    painter.setBrush(gui::Painter::Color(0x80, 0x00, 0x80, 150));
+    painter.setBrush(web::Painter::Color(0x80, 0x00, 0x80, 150));
   }
 }
 
-void Graphics::setMacroBlockages(const std::vector<odb::Rect>& macro_blockages)
+void Graphics::setSoftBlockages(const std::vector<odb::Rect>& soft_blockages)
 {
-  macro_blockages_ = macro_blockages;
-}
-
-void Graphics::setPlacementBlockages(
-    const std::vector<odb::Rect>& placement_blockages)
-{
-  placement_blockages_ = placement_blockages;
+  soft_blockages_ = soft_blockages;
 }
 
 void Graphics::setShowBundledNets(bool show_bundled_nets)
@@ -797,8 +783,7 @@ void Graphics::eraseDrawing()
 
   soft_macros_.clear();
   hard_macros_.clear();
-  macro_blockages_.clear();
-  placement_blockages_.clear();
+  soft_blockages_.clear();
   nets_.clear();
   outline_.reset(0, 0, 0, 0);
   outlines_.clear();

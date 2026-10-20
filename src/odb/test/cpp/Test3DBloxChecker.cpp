@@ -2,87 +2,16 @@
 // Copyright (c) 2023-2026, The OpenROAD Authors
 
 #include <string>
-#include <vector>
 
+#include "Test3DBloxCheckerFixture.h"
 #include "gtest/gtest.h"
 #include "odb/3dblox.h"
 #include "odb/db.h"
 #include "odb/dbObject.h"
 #include "odb/geom.h"
-#include "tst/fixture.h"
 
 namespace odb {
 namespace {
-
-class CheckerFixture : public tst::Fixture
-{
- protected:
-  CheckerFixture()
-  {
-    tech_ = dbTech::create(db_.get(), "tech");
-    top_chip_
-        = dbChip::create(db_.get(), nullptr, "TopChip", dbChip::ChipType::HIER);
-
-    // Create master chips
-    chip1_ = dbChip::create(db_.get(), tech_, "Chip1", dbChip::ChipType::DIE);
-    chip1_->setWidth(2000);
-    chip1_->setHeight(2000);
-    chip1_->setThickness(500);
-
-    chip2_ = dbChip::create(db_.get(), tech_, "Chip2", dbChip::ChipType::DIE);
-    chip2_->setWidth(1500);
-    chip2_->setHeight(1500);
-    chip2_->setThickness(500);
-
-    // Create regions on master chips
-    auto r1_fr = dbChipRegion::create(
-        chip1_, "r1_fr", dbChipRegion::Side::FRONT, nullptr);
-    r1_fr->setBox(Rect(0, 0, 2000, 2000));
-
-    auto r2_bk = dbChipRegion::create(
-        chip2_, "r2_bk", dbChipRegion::Side::BACK, nullptr);
-    r2_bk->setBox(Rect(0, 0, 1500, 1500));
-
-    auto r2_fr = dbChipRegion::create(
-        chip2_, "r2_fr", dbChipRegion::Side::FRONT, nullptr);
-    r2_fr->setBox(Rect(0, 0, 1500, 1500));
-  }
-
-  void check()
-  {
-    db_->setTopChip(top_chip_);
-    ThreeDBlox three_dblox(&logger_, db_.get());
-    three_dblox.check();
-  }
-
-  std::vector<dbMarker*> getMarkers(const char* category_name)
-  {
-    auto top_cat = top_chip_->findMarkerCategory("3DBlox");
-    if (!top_cat) {
-      return {};
-    }
-    auto cat = top_cat->findMarkerCategory(category_name);
-    if (!cat) {
-      return {};
-    }
-
-    std::vector<dbMarker*> markers;
-    for (auto* m : cat->getMarkers()) {
-      markers.push_back(m);
-    }
-    return markers;
-  }
-
-  dbTech* tech_;
-  dbChip* top_chip_;
-  dbChip* chip1_;
-  dbChip* chip2_;
-
-  static constexpr const char* floating_chips_category = "Floating chips";
-  static constexpr const char* overlapping_chips_category = "Overlapping chips";
-  static constexpr const char* unused_internal_ext_category
-      = "Unused internal_ext";
-};
 
 TEST_F(CheckerFixture, test_no_violations)
 {
@@ -97,12 +26,13 @@ TEST_F(CheckerFixture, test_no_violations)
   auto* ri1 = inst1->findChipRegionInst("r1_fr");
   auto* ri2 = inst2->findChipRegionInst("r2_bk");
 
-  auto* conn1 = dbChipConn::create("c1", top_chip_, {inst1}, ri1, {inst2}, ri2);
+  auto* conn1 = dbChipConn::create("c1", top_chip_, {inst2}, ri2, {inst1}, ri1);
   conn1->setThickness(0);
 
   check();
   EXPECT_TRUE(getMarkers(floating_chips_category).empty());
   EXPECT_TRUE(getMarkers(overlapping_chips_category).empty());
+  EXPECT_TRUE(getMarkers(connected_regions_category).empty());
 }
 
 TEST_F(CheckerFixture, test_overlapping_chips)
@@ -142,7 +72,7 @@ TEST_F(CheckerFixture, test_single_floating_chip)
 
   auto* ri1 = inst1->findChipRegionInst("r1_fr");
   auto* ri2 = inst2->findChipRegionInst("r2_bk");
-  auto* conn1 = dbChipConn::create("c1", top_chip_, {inst1}, ri1, {inst2}, ri2);
+  auto* conn1 = dbChipConn::create("c1", top_chip_, {inst2}, ri2, {inst1}, ri1);
   conn1->setThickness(0);
 
   check();
@@ -179,7 +109,7 @@ TEST_F(CheckerFixture, test_multiple_floating_groups)
 
   auto* ri1 = inst1->findChipRegionInst("r1_fr");
   auto* ri2 = inst2->findChipRegionInst("r2_bk");
-  auto* conn1 = dbChipConn::create("c1", top_chip_, {inst1}, ri1, {inst2}, ri2);
+  auto* conn1 = dbChipConn::create("c1", top_chip_, {inst2}, ri2, {inst1}, ri1);
   conn1->setThickness(0);
 
   check();
@@ -196,7 +126,7 @@ TEST_F(CheckerFixture, test_connectivity_gap)
   auto inst2 = dbChipInst::create(top_chip_, chip2_, "inst2");
   auto* ri1 = inst1->findChipRegionInst("r1_fr");
   auto* ri2 = inst2->findChipRegionInst("r2_bk");
-  auto* conn = dbChipConn::create("c1", top_chip_, {inst1}, ri1, {inst2}, ri2);
+  auto* conn = dbChipConn::create("c1", top_chip_, {inst2}, ri2, {inst1}, ri1);
   conn->setThickness(100);  // Expect gap of 100
 
   // Case 1: Valid connection
@@ -416,6 +346,184 @@ TEST_F(CheckerFixture, test_used_internal_ext)
 
   check();
   EXPECT_TRUE(getMarkers(unused_internal_ext_category).empty());
+}
+
+TEST_F(CheckerFixture, test_connection_invalid_xy)
+{
+  auto inst1 = dbChipInst::create(top_chip_, chip1_, "inst1");
+  inst1->setLoc(Point3D(0, 0, 0));
+  inst1->setOrient(dbOrientType3D(dbOrientType::R0, false));
+
+  auto inst2 = dbChipInst::create(top_chip_, chip2_, "inst2");
+  inst2->setLoc(Point3D(3000, 3000, 500));  // No XY overlap
+  inst2->setOrient(dbOrientType3D(dbOrientType::R0, false));
+
+  auto* ri1 = inst1->findChipRegionInst("r1_fr");
+  auto* ri2 = inst2->findChipRegionInst("r2_bk");
+
+  auto* conn = dbChipConn::create("c1", top_chip_, {inst2}, ri2, {inst1}, ri1);
+  conn->setThickness(0);
+
+  check();
+  auto markers = getMarkers(connected_regions_category);
+  ASSERT_EQ(markers.size(), 1);
+  EXPECT_NE(markers[0]->getComment().find("do not overlap in the XY plane"),
+            std::string::npos);
+}
+
+TEST_F(CheckerFixture, test_connection_invalid_sides)
+{
+  auto inst1 = dbChipInst::create(top_chip_, chip1_, "inst1");
+  inst1->setLoc(Point3D(0, 0, 0));
+  inst1->setOrient(dbOrientType3D(dbOrientType::R0, false));
+
+  auto inst2 = dbChipInst::create(top_chip_, chip2_, "inst2");
+  inst2->setLoc(Point3D(0, 0, 500));
+  inst2->setOrient(dbOrientType3D(dbOrientType::R0, false));
+
+  // Both regions are on the FRONT side, but facing each other requires one to
+  // be BACK
+  auto* ri1 = inst1->findChipRegionInst("r1_fr");
+  auto* ri2 = inst2->findChipRegionInst("r2_fr");
+
+  auto* conn = dbChipConn::create("c1", top_chip_, {inst1}, ri1, {inst2}, ri2);
+  conn->setThickness(0);
+
+  check();
+  auto markers = getMarkers(connected_regions_category);
+  ASSERT_EQ(markers.size(), 1);
+  EXPECT_NE(markers[0]->getComment().find("Ill-defined stacking direction"),
+            std::string::npos);
+}
+
+TEST_F(CheckerFixture, test_connection_swapped_top_bottom)
+{
+  auto inst1 = dbChipInst::create(top_chip_, chip1_, "inst1");
+  inst1->setLoc(Point3D(0, 0, 0));
+  inst1->setOrient(dbOrientType3D(dbOrientType::R0, false));
+
+  auto inst2 = dbChipInst::create(top_chip_, chip2_, "inst2");
+  inst2->setLoc(Point3D(0, 0, 500));  // Stacked on top
+  inst2->setOrient(dbOrientType3D(dbOrientType::R0, false));
+
+  auto* ri1 = inst1->findChipRegionInst("r1_fr");
+  auto* ri2 = inst2->findChipRegionInst("r2_bk");
+
+  // The regions mate physically, but the connection declares the lower die's
+  // region as top and the upper die's region as bottom.
+  auto* conn = dbChipConn::create("c1", top_chip_, {inst1}, ri1, {inst2}, ri2);
+  conn->setThickness(0);
+
+  check();
+  auto markers = getMarkers(connected_regions_category);
+  ASSERT_EQ(markers.size(), 1);
+  EXPECT_NE(markers[0]->getComment().find("Ill-defined stacking direction"),
+            std::string::npos);
+}
+
+TEST_F(CheckerFixture, test_connection_in_z_mirrored_assembly)
+{
+  // Assembly with chip2 stacked on chip1 and a properly declared connection:
+  // top is the upper die's down-facing region.
+  auto* assembly
+      = dbChip::create(db_.get(), nullptr, "Assembly", dbChip::ChipType::HIER);
+
+  auto inst1 = dbChipInst::create(assembly, chip1_, "inst1");
+  inst1->setLoc(Point3D(0, 0, 0));
+  inst1->setOrient(dbOrientType3D(dbOrientType::R0, false));
+
+  auto inst2 = dbChipInst::create(assembly, chip2_, "inst2");
+  inst2->setLoc(Point3D(0, 0, 500));  // Stacked on top
+  inst2->setOrient(dbOrientType3D(dbOrientType::R0, false));
+
+  auto* ri1 = inst1->findChipRegionInst("r1_fr");
+  auto* ri2 = inst2->findChipRegionInst("r2_bk");
+  auto* conn = dbChipConn::create("c1", assembly, {inst2}, ri2, {inst1}, ri1);
+  conn->setThickness(0);
+
+  // Mirror the whole assembly in Z at the top level. In world coordinates
+  // r1_fr now faces down from above and r2_bk faces up from below.
+  auto asm_inst = dbChipInst::create(top_chip_, assembly, "asm_inst");
+  asm_inst->setOrient(dbOrientType3D(dbOrientType::R0, true));
+  asm_inst->setLoc(Point3D(0, 0, 0));
+
+  check();
+  EXPECT_TRUE(getMarkers(connected_regions_category).empty());
+
+  // The unfolded connection reflects world orientation: the declared roles
+  // swap under the mirror.
+  auto conns = db_->getUnfoldedChipConns();
+  ASSERT_EQ(conns.size(), 1);
+  dbUnfoldedChipConn* uf_conn = *conns.begin();
+  EXPECT_EQ(
+      uf_conn->getTopRegion()->getChipRegionInst()->getChipRegion()->getName(),
+      "r1_fr");
+  EXPECT_EQ(uf_conn->getBottomRegion()
+                ->getChipRegionInst()
+                ->getChipRegion()
+                ->getName(),
+            "r2_bk");
+}
+
+TEST_F(CheckerFixture, test_connection_thickness_mismatch)
+{
+  auto inst1 = dbChipInst::create(top_chip_, chip1_, "inst1");
+  inst1->setLoc(Point3D(0, 0, 0));
+  inst1->setOrient(dbOrientType3D(dbOrientType::R0, false));
+
+  auto inst2 = dbChipInst::create(top_chip_, chip2_, "inst2");
+  inst2->setLoc(Point3D(0, 0, 600));  // Distance is 100
+  inst2->setOrient(dbOrientType3D(dbOrientType::R0, false));
+
+  auto* ri1 = inst1->findChipRegionInst("r1_fr");
+  auto* ri2 = inst2->findChipRegionInst("r2_bk");
+
+  auto* conn = dbChipConn::create("c1", top_chip_, {inst2}, ri2, {inst1}, ri1);
+  conn->setThickness(50);  // Mismatch (100 != 50)
+
+  check();
+  auto markers = getMarkers(connected_regions_category);
+  ASSERT_EQ(markers.size(), 1);
+  EXPECT_NE(
+      markers[0]->getComment().find("does not match connection thickness"),
+      std::string::npos);
+}
+
+TEST_F(CheckerFixture, test_connection_internal_ext)
+{
+  // internal_ext regions overlap in Z
+  auto r1_int = dbChipRegion::create(
+      chip1_, "r1_int", dbChipRegion::Side::INTERNAL_EXT, nullptr);
+  r1_int->setBox(Rect(0, 0, 2000, 2000));
+
+  auto r2_int = dbChipRegion::create(
+      chip2_, "r2_int", dbChipRegion::Side::INTERNAL_EXT, nullptr);
+  r2_int->setBox(Rect(0, 0, 1500, 1500));
+
+  auto inst1 = dbChipInst::create(top_chip_, chip1_, "inst1");
+  inst1->setLoc(Point3D(0, 0, 0));
+  inst1->setOrient(dbOrientType3D(dbOrientType::R0, false));
+
+  auto inst2 = dbChipInst::create(top_chip_, chip2_, "inst2");
+  inst2->setLoc(Point3D(0, 0, 100));  // Z overlap since chip1 thickness is 500
+  inst2->setOrient(dbOrientType3D(dbOrientType::R0, false));
+
+  auto* ri1 = inst1->findChipRegionInst("r1_int");
+  auto* ri2 = inst2->findChipRegionInst("r2_int");
+
+  auto* conn = dbChipConn::create("c1", top_chip_, {inst1}, ri1, {inst2}, ri2);
+  conn->setThickness(0);
+
+  check();
+  EXPECT_TRUE(getMarkers(connected_regions_category).empty());
+
+  // Test failure: move inst2 outside Z-range of inst1
+  inst2->setLoc(Point3D(0, 0, 600));
+  check();
+  auto markers = getMarkers(connected_regions_category);
+  ASSERT_EQ(markers.size(), 1);
+  EXPECT_NE(markers[0]->getComment().find("do not overlap in Z"),
+            std::string::npos);
 }
 
 }  // namespace

@@ -32,6 +32,7 @@
 #include "db_sta/dbNetwork.hh"
 #include "db_sta/dbSta.hh"
 #include "odb/db.h"
+#include "rsz/Resizer.hh"
 #include "sta/Clock.hh"
 #include "sta/FuncExpr.hh"
 #include "sta/Liberty.hh"
@@ -582,9 +583,13 @@ void warnPowerDomainCrossings(odb::dbDatabase* db,
 
 namespace dft {
 
-Dft::Dft(odb::dbDatabase* db, sta::dbSta* sta, utl::Logger* logger)
+Dft::Dft(odb::dbDatabase* db,
+         sta::dbSta* sta,
+         rsz::Resizer* resizer,
+         utl::Logger* logger)
     : db_(db),
       sta_(sta),
+      resizer_(resizer),
       logger_(logger),
       dft_config_(std::make_unique<DftConfig>())
 {
@@ -603,11 +608,7 @@ void Dft::reset()
 
 void Dft::pre_dft()
 {
-  scan_replace_
-      = std::make_unique<ScanReplace>(db_,
-                                      sta_,
-                                      logger_,
-                                      &dft_config_->getScanArchitectConfig());
+  scan_replace_ = std::make_unique<ScanReplace>(db_, sta_, resizer_, logger_, &dft_config_->getScanArchitectConfig());
   scan_replace_->collectScanCellAvailable();
 
   // This should always be at the end

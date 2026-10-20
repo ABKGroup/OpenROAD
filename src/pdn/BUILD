@@ -2,9 +2,10 @@
 # Copyright (c) 2025, The OpenROAD Authors
 
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
-load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
+load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
 load("//bazel:tcl_encode_or.bzl", "tcl_encode")
 load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+load("//test:regression.bzl", "messages_txt")
 
 package(
     default_visibility = ["//:__subpackages__"],
@@ -24,6 +25,8 @@ cc_library(
         "src/grid.h",
         "src/grid_component.cpp",
         "src/grid_component.h",
+        "src/polygon.cpp",
+        "src/polygon.h",
         "src/power_cells.cpp",
         "src/power_cells.h",
         "src/renderer.cpp",
@@ -54,12 +57,13 @@ cc_library(
     ],
     includes = [
         "include",
+        "src",
     ],
     deps = [
         "//:ord",
-        "//src/gui",
-        "//src/odb",
+        "//src/odb/src/db",
         "//src/utl",
+        "//src/web:core",
         "@boost.geometry",
         "@boost.polygon",
         "@boost.stacktrace",
@@ -108,4 +112,26 @@ python_wrap_cc(
     deps = [
         "//src/odb:swig-py",
     ],
+)
+
+filegroup(
+    name = "doc_files",
+    srcs = [
+        "README.md",
+        "src/pdn.tcl",
+    ],
+    visibility = ["//src/pdn/test:__pkg__"],
+)
+
+messages_txt(
+    visibility = [
+        "//docs:__pkg__",
+        "//src/pdn/test:__pkg__",
+    ],
+)
+
+python_wrap_library(
+    name = "py_wrap",
+    includes = ["src"],
+    deps = [":pdn"],
 )

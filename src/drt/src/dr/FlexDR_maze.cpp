@@ -25,7 +25,6 @@
 #include "db/gcObj/gcNet.h"
 #include "db/gcObj/gcPin.h"
 #include "db/infra/frBox.h"
-#include "db/infra/frPoint.h"
 #include "db/infra/frSegStyle.h"
 #include "db/obj/frAccess.h"
 #include "db/obj/frBTerm.h"
@@ -640,6 +639,7 @@ void FlexDRWorker::modMinimumcutCostVia(const odb::Rect& box,
             case setFixedShape:
               gridGraph_.setFixedShapeCostVia(gridGraph_.getIdx(i, j, z),
                                               1);  // safe access
+              break;
             default:;
           }
         }
@@ -744,8 +744,7 @@ void FlexDRWorker::modMinSpacingCostViaHelper(const odb::Rect& box,
 
   // via prl should check min area patch metal if not fat via
   auto lNum = gridGraph_.getLayerNum(z);
-  bool isH
-      = (getTech()->getLayer(lNum)->getDir() == dbTechLayerDir::HORIZONTAL);
+  bool isH = getTech()->getLayer(lNum)->isHorizontal();
   bool isFatVia = (isH) ? (viaBox.dy() > width) : (viaBox.dx() > width);
 
   frCoord length2_mar = length2;
@@ -1607,7 +1606,7 @@ bool FlexDRWorker::mazeIterInit_sortRerouteNets(
     if (router_cfg_->OR_SEED != -1 && rerouteNets.size() >= 2) {
       std::uniform_int_distribution<int> distribution(0,
                                                       rerouteNets.size() - 1);
-      std::default_random_engine generator(router_cfg_->OR_SEED);
+      std::mt19937 generator(router_cfg_->OR_SEED);
       int numSwap = (double) (rerouteNets.size()) * router_cfg_->OR_K;
       for (int i = 0; i < numSwap; i++) {
         int idx = distribution(generator);
@@ -1643,6 +1642,16 @@ void FlexDRWorker::mazeNetInit(drNet* net)
 {
   gridGraph_.resetStatus();
   gridGraph_.setNDR(net->getFrNet()->getNondefaultRule());
+  // Routing watermark: if this net is a watermark net, inflate the
+  // non-preferred-direction ("wrong-way") grid cost so that the maze
+  // strongly prefers preferred-direction edges, approximating the
+  // IC Craftsman "limit way = 1" rule used in Kahng et al. (ISPD'98).
+  if (net->getFrNet() && net->getFrNet()->isWatermark()) {
+    gridGraph_.setWrongWayWatermarkMultiplier(
+        router_cfg_->WATERMARK_WRONGWAY_MULT);
+  } else {
+    gridGraph_.setWrongWayWatermarkMultiplier(1.0f);
+  }
   // sub term / instterm cost when net is about to route
   initMazeCost_terms(net->getFrNetTerms(), false, true);
   // sub via access cost when net is about to route
@@ -1669,6 +1678,9 @@ void FlexDRWorker::mazeNetEnd(drNet* net)
   initMazeCost_boundary_helper(net, true);
   gridGraph_.setNDR(nullptr);
   gridGraph_.setDstTaperBox(nullptr);
+  // Reset watermark multiplier so subsequent non-watermark nets route
+  // with the router's default non-preferred-direction cost.
+  gridGraph_.setWrongWayWatermarkMultiplier(1.0f);
 }
 
 void FlexDRWorker::writeGCPatchesToDRWorker(
@@ -1937,7 +1949,7 @@ void FlexDRWorker::route_queue_main(std::queue<RouteQueueEntry>& rerouteQueue)
       mazeNetInit(net);
       std::vector<FlexMazeIdx> paths;
       bool isRouted = routeNet(net, paths);
-      if (isRouted == false) {
+      if (!isRouted) {
         if (router_cfg_->OUT_MAZE_FILE == std::string("")) {
           if (router_cfg_->VERBOSE > 0) {
             std::cout
@@ -2229,7 +2241,7 @@ void FlexDRWorker::routeNet_prep(
     }
     unConnPins.insert(pin.get());
     if (gridGraph_.getNDR()) {
-      if (router_cfg_->AUTO_TAPER_NDR_NETS
+      if (net->autoTaperEnabled(router_cfg_->AUTO_TAPER_NDR_NETS)
           && pin->isInstPin()) {  // create a taper box for each pin
         auto [l, h] = pin->getAPBbox();
         frCoord pitch
@@ -2648,7 +2660,8 @@ void FlexDRWorker::routeNet_postAstarWritePath(
           via = net_ndr->getPrefVia(startLayerNum / 2 - 1);
         }
         auto currVia = std::make_unique<drVia>(via);
-        if (net->hasNDR() && router_cfg_->AUTO_TAPER_NDR_NETS) {
+        if (net->hasNDR()
+            && net->autoTaperEnabled(router_cfg_->AUTO_TAPER_NDR_NETS)) {
           if (isInsideTaperBox(endX, endY, startZ, endZ, mazeIdx2TaperBox)) {
             currVia->setTapered(true);
           }
@@ -2697,9 +2710,9 @@ void FlexDRWorker::addApExtFigUpdate(drNet* net,
                                      const FlexMazeIdx& ap_idx) const
 {
   frLayerNum layer_num = gridGraph_.getLayerNum(ap_idx.z());
-  Point3D real_point;
-  gridGraph_.getPoint(real_point, ap_idx.x(), ap_idx.y());
-  real_point.setZ(layer_num);
+  odb::Point real_point_xy;
+  gridGraph_.getPoint(real_point_xy, ap_idx.x(), ap_idx.y());
+  const odb::Point3D real_point(real_point_xy, layer_num);
   for (const auto& ext_obj : net->getExtConnFigs()) {
     if (ext_obj->typeId() == drcPathSeg) {
       const drPathSeg* path_seg = static_cast<const drPathSeg*>(ext_obj.get());
@@ -2708,12 +2721,12 @@ void FlexDRWorker::addApExtFigUpdate(drNet* net,
         continue;
       }
       frSegStyle style = path_seg->getStyle();
-      if (bp == real_point) {
+      if (bp == real_point.xy()) {
         style.setBeginStyle(frcTruncateEndStyle, 0);
         net->updateExtFigStyle(real_point, style);
         return;
       }
-      if (ep == real_point) {
+      if (ep == real_point.xy()) {
         style.setEndStyle(frcTruncateEndStyle, 0);
         net->updateExtFigStyle(real_point, style);
         return;
@@ -2721,7 +2734,7 @@ void FlexDRWorker::addApExtFigUpdate(drNet* net,
     } else if (ext_obj->typeId() == drcVia) {
       auto via = static_cast<const drVia*>(ext_obj.get());
       odb::Point via_point = via->getOrigin();
-      if (via_point != real_point) {
+      if (via_point != real_point.xy()) {
         continue;
       }
       auto via_def = via->getViaDef();
@@ -2818,7 +2831,8 @@ bool FlexDRWorker::splitPathSeg(frMIdx& midX,
                                 drNet* net)
 {
   taperFirstPiece = false;
-  if (!net->hasNDR() || !router_cfg_->AUTO_TAPER_NDR_NETS) {
+  if (!net->hasNDR()
+      || !net->autoTaperEnabled(router_cfg_->AUTO_TAPER_NDR_NETS)) {
     return false;
   }
   frBox3D* bx = nullptr;
@@ -3215,7 +3229,6 @@ bool FlexDRWorker::routeNet(drNet* net, std::vector<FlexMazeIdx>& paths)
 
   // Verify if net has jumpers
   const bool route_with_jumpers = net->getFrNet()->hasJumpers();
-
   if (net->getPins().size() <= 1) {
     return true;
   }
@@ -3365,7 +3378,7 @@ void FlexDRWorker::routeNet_postAstarPatchMinAreaVio(
           = (minAreaConstraint) ? minAreaConstraint->getMinArea() : 0;
       // add curr via enclosure
       frMIdx z = (nextIdx.z() < currIdx.z()) ? currIdx.z() - 1 : currIdx.z();
-      bool isLayer1 = (nextIdx.z() < currIdx.z()) ? false : true;
+      bool isLayer1 = nextIdx.z() >= currIdx.z();
       if (prev_is_wire) {
         currArea += getHalfViaEncArea(
             z, isLayer1, net->getFrNet()->getNondefaultRule());
@@ -3491,7 +3504,7 @@ void FlexDRWorker::routeNet_postAstarPatchMinAreaVio_helper(
     end_point = points[point_idx - 1];
     FlexMazeIdx begin_point_successor = points[prev_point_idx + 1],
                 end_point_predecessor = points[point_idx - 2];
-    if (curr_layer->getDir() == dbTechLayerDir::HORIZONTAL) {
+    if (curr_layer->isHorizontal()) {
       is_bp_patch_style_left
           = (begin_point.x() == begin_point_successor.x())
                 ? (begin_point.x() < end_point.x())
@@ -3683,11 +3696,7 @@ void FlexDRWorker::routeNet_postAstarAddPatchMetal(drNet* net,
                         * getTech()->getManufacturingGrid();
 
   // always patch to pref dir
-  if (getTech()->getLayer(layerNum)->getDir() == dbTechLayerDir::HORIZONTAL) {
-    isPatchHorz = true;
-  } else {
-    isPatchHorz = false;
-  }
+  isPatchHorz = getTech()->getLayer(layerNum)->isHorizontal();
 
   auto costL = routeNet_postAstarAddPathMetal_isClean(
       bpIdx, isPatchHorz, bpPatchLeft, patchLength);

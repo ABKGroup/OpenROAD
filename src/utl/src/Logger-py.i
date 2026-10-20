@@ -2,7 +2,7 @@
 // Copyright (c) 2020-2025, The OpenROAD Authors
 
 #ifdef BAZEL
-%module(package="src.utl") utl
+%module(package="src.utl") utl_py
 #else
 %module utl_py
 #endif
@@ -10,16 +10,10 @@
 #ifdef BAZEL
 %{
 #include "utl/Logger.h"
+#include "LoggerCommon.h"
 
-namespace ord {
-// Defined in OpenRoad.i
-utl::Logger *
-getLogger();
-}
 using utl::ToolId;
 using utl::Logger;
-using ord::getLogger;
-
 using namespace utl;
 
 %}
@@ -56,6 +50,4 @@ using namespace utl;
 %ignore utl::Logger::swapProgress;
 
 %include "utl/Logger.h"
-#ifndef BAZEL
 %include "LoggerCommon.h"
-#endif

@@ -4,7 +4,6 @@
 #include "ir_network.h"
 
 #include <algorithm>
-#include <array>
 #include <cstddef>
 #include <fstream>
 #include <iterator>
@@ -20,6 +19,7 @@
 #include "boost/polygon/polygon.hpp"
 #include "connection.h"
 #include "node.h"
+#include "odb/PtrSetMap.h"
 #include "odb/db.h"
 #include "odb/dbShape.h"
 #include "odb/dbTransform.h"
@@ -30,6 +30,40 @@
 #include "utl/timer.h"
 
 namespace psm {
+
+namespace {
+
+// The middle of the edges two trapezoids share. They are slices of one
+// polygon cut vertically, so they can only share a vertical edge.
+std::vector<odb::Point> getSharedEdgeCenters(
+    const std::vector<odb::Point>& points0,
+    const std::vector<odb::Point>& points1)
+{
+  std::vector<odb::Point> centers;
+  // the last point closes each polygon, so all but it start an edge
+  for (std::size_t i = 0; i + 1 < points0.size(); i++) {
+    const odb::Point& start0 = points0[i];
+    const odb::Point& end0 = points0[i + 1];
+    for (std::size_t j = 0; j + 1 < points1.size(); j++) {
+      const odb::Point& start1 = points1[j];
+      const odb::Point& end1 = points1[j + 1];
+      if (start0.x() != end0.x() || start1.x() != end1.x()
+          || start0.x() != start1.x()) {
+        continue;
+      }
+      const int low = std::max(std::min(start0.y(), end0.y()),
+                               std::min(start1.y(), end1.y()));
+      const int high = std::min(std::max(start0.y(), end0.y()),
+                                std::max(start1.y(), end1.y()));
+      if (low < high) {
+        centers.emplace_back(start0.x(), (low + high) / 2);
+      }
+    }
+  }
+  return centers;
+}
+
+}  // namespace
 
 IRNetwork::IRNetwork(odb::dbNet* net, utl::Logger* logger, bool floorplanning)
     : net_(net), logger_(logger), floorplanning_(floorplanning)
@@ -76,6 +110,16 @@ odb::dbTech* IRNetwork::getTech() const
   return getBlock()->getTech();
 }
 
+bool IRNetwork::hasNodes() const
+{
+  for (const auto& [layer, nodes] : nodes_) {
+    if (!nodes.empty()) {
+      return true;
+    }
+  }
+  return !iterm_nodes_.empty() || !bpin_nodes_.empty();
+}
+
 void IRNetwork::reset()
 {
   shapes_.clear();
@@ -97,6 +141,12 @@ void IRNetwork::construct()
 
   generateRoutingLayerShapesAndNodes();
   generateCutLayerNodes();
+
+  if (!hasNodes()) {
+    logger_->warn(utl::PSM, 86, "Net {} is empty.", net_->getName());
+    return;
+  }
+
   generateTopLayerFillerNodes();
   sortNodes();
   if (logger_->debugCheck(utl::PSM, "dump", 2)) {
@@ -148,27 +198,11 @@ void IRNetwork::recoverMemory()
              connections_.capacity());
 }
 
-IRNetwork::Polygon90 IRNetwork::rectToPolygon(const odb::Rect& rect) const
+IRNetwork::LayerMap<odb::geom::BoostPolygon90Set>
+IRNetwork::generatePolygonsFromBox(odb::dbBox* box,
+                                   const odb::dbTransform& transform) const
 {
-  using Pt = Polygon90::point_type;
-
-  std::array<Pt, 4> pts = {Pt(rect.xMin(), rect.yMin()),
-                           Pt(rect.xMax(), rect.yMin()),
-                           Pt(rect.xMax(), rect.yMax()),
-                           Pt(rect.xMin(), rect.yMax())};
-
-  Polygon90 poly;
-  poly.set(pts.begin(), pts.end());
-  return poly;
-}
-
-IRNetwork::LayerMap<IRNetwork::Polygon90Set> IRNetwork::generatePolygonsFromBox(
-    odb::dbBox* box,
-    const odb::dbTransform& transform) const
-{
-  using boost::polygon::operators::operator+=;
-
-  LayerMap<Polygon90Set> shapes_by_layer;
+  LayerMap<odb::geom::BoostPolygon90Set> shapes_by_layer;
 
   if (box->isVia()) {
     // handle as via
@@ -181,12 +215,12 @@ IRNetwork::LayerMap<IRNetwork::Polygon90Set> IRNetwork::generatePolygonsFromBox(
         // via box
       } else {
         // enclosure box
-        Polygon90Set& shapes = shapes_by_layer[layer];
+        odb::geom::BoostPolygon90Set& shapes = shapes_by_layer[layer];
 
         odb::Rect rect = shape.getBox();
         transform.apply(rect);
 
-        shapes += rectToPolygon(rect);
+        shapes.insert(odb::geom::toPolygon90(rect));
       }
     }
   } else {
@@ -197,44 +231,52 @@ IRNetwork::LayerMap<IRNetwork::Polygon90Set> IRNetwork::generatePolygonsFromBox(
       // Only collect shapes on routing layers
       odb::Rect rect = box->getBox();
       transform.apply(rect);
-      shapes_by_layer[layer] += rectToPolygon(rect);
+      shapes_by_layer[layer].insert(odb::geom::toPolygon90(rect));
     }
   }
 
   return shapes_by_layer;
 }
 
-IRNetwork::LayerMap<IRNetwork::Polygon90Set>
-IRNetwork::generatePolygonsFromSWire(odb::dbSWire* wire)
+IRNetwork::LayerMap<odb::geom::BoostPolygon90Set>
+IRNetwork::generatePolygonsFromSWire(odb::dbSWire* wire,
+                                     LayerMap<Polygon45Set>& shapes_45)
 {
-  using boost::polygon::operators::operator+=;
-
   const utl::DebugScopedTimer timer(
       logger_, utl::PSM, "timer", 1, "Generate shapes from SWire: {}");
 
-  LayerMap<Polygon90Set> shapes_by_layer;
+  LayerMap<odb::geom::BoostPolygon90Set> shapes_by_layer;
 
   for (odb::dbSBox* box : wire->getWires()) {
+    if (box->getDirection() == odb::dbSBox::OCTILINEAR) {
+      // a 45 degree wire, its box would be all of its bounding box
+      odb::dbTechLayer* layer = box->getTechLayer();
+      if (layer->getRoutingLevel() != 0) {
+        const std::vector<odb::Point> points = box->getOct().getPoints();
+        shapes_45[layer].insert(Polygon45(points.begin(), points.end()));
+      }
+      continue;
+    }
     for (const auto& [layer, polygon] :
          generatePolygonsFromBox(box, odb::dbTransform())) {
-      shapes_by_layer[layer] += polygon;
+      shapes_by_layer[layer].insert(polygon);
     }
   }
 
   return shapes_by_layer;
 }
 
-IRNetwork::LayerMap<IRNetwork::Polygon90Set>
-IRNetwork::generatePolygonsFromITerms(std::vector<TerminalNode*>& terminals)
+IRNetwork::LayerMap<odb::geom::BoostPolygon90Set>
+IRNetwork::generatePolygonsFromITerms(std::vector<TerminalNode*>& terminals,
+                                      LayerMap<Polygon45Set>& shapes_45)
 {
-  using boost::polygon::operators::operator+=;
-
   const utl::DebugScopedTimer timer(
       logger_, utl::PSM, "timer", 1, "Generate shapes from ITerms: {}");
 
-  auto* base_layer = getTech()->findRoutingLayer(1);
+  odb::dbTechLayer* front_base = getTech()->firstFrontsideRoutingLayer();
+  odb::dbTechLayer* back_base = getTech()->firstBacksideRoutingLayer();
 
-  LayerMap<Polygon90Set> shapes_by_layer;
+  LayerMap<odb::geom::BoostPolygon90Set> shapes_by_layer;
   bool floorplan_asseted = false;
   for (auto* iterm : net_->getITerms()) {
     auto* inst = iterm->getInst();
@@ -251,21 +293,115 @@ IRNetwork::generatePolygonsFromITerms(std::vector<TerminalNode*>& terminals)
       continue;
     }
 
+    // First pass: figure out which side(s) this iterm has pin geometry on
+    // so we can pick the iterm base node's layer accordingly. Only the
+    // layer matters here, so skip the polygon/transform work.
+    bool has_front_pin = false;
+    bool has_back_pin = false;
+    for (auto* mpin : iterm->getMTerm()->getMPins()) {
+      for (auto* geom : mpin->getGeometry()) {
+        odb::dbTechLayer* layer = geom->getTechLayer();
+        if (layer == nullptr) {
+          continue;
+        }
+        if (layer->isBackside()) {
+          has_back_pin = true;
+        } else {
+          has_front_pin = true;
+        }
+      }
+    }
+
+    // Place the iterm base node on the cell's "primary" side. A
+    // backside-only cell's base belongs on the backside grid so its
+    // pin connects to real shapes; otherwise default to the front side.
+    odb::dbTechLayer* base_layer = front_base;
+    if (!has_front_pin && has_back_pin && back_base != nullptr) {
+      base_layer = back_base;
+    }
+    const bool primary_is_back = base_layer == back_base;
+    const bool is_bridge = inst->getMaster()->isBacksideBridge();
+
     int x, y;
     iterm->getAvgXY(&x, &y);
     auto base_node
         = std::make_unique<ITermNode>(iterm, odb::Point(x, y), base_layer);
 
+    auto link_terminal = [&](Node* term, odb::dbTechLayer* term_layer) {
+      const bool term_is_back = term_layer->isBackside();
+      if (term_is_back == primary_is_back) {
+        // Same-side terminal: ordinary virtual edge into the base node.
+        connections_.push_back(
+            std::make_unique<TermConnection>(base_node.get(), term));
+      } else if (is_bridge) {
+        // Bridge cell: explicit virtual edge across the front/back boundary.
+        connections_.push_back(
+            std::make_unique<BridgeConnection>(base_node.get(), term));
+      }
+      // Non-bridge cross-side terminals are intentionally left
+      // unlinked from the iterm base node. They still join the
+      // local layer graph through cleanupOverlappingNodes(); if
+      // they end up unreachable, that surfaces as an open net,
+      // which is the correct outcome for a malformed PG.
+    };
+
     bool has_routing_term = false;
     for (auto* mpin : iterm->getMTerm()->getMPins()) {
+      // odb holds each pin polygon as boxes too. Those are exact for a
+      // rectilinear polygon, but for one with 45 degree edges they reach
+      // outside of it, so that polygon is added itself instead.
+      odb::PtrSet<odb::dbBox> polygon_boxes;
+      for (odb::dbPolygon* pin : mpin->getPolygonGeometry()) {
+        odb::dbTechLayer* layer = pin->getTechLayer();
+        odb::Polygon polygon = pin->getPolygon();
+        std::vector<odb::Point> points = polygon.getPoints();
+        const bool rectilinear = std::ranges::adjacent_find(
+                                     points,
+                                     [](const auto& a, const auto& b) {
+                                       return a.x() != b.x() && a.y() != b.y();
+                                     })
+                                 == points.end();
+        if (layer->getRoutingLevel() == 0 || rectilinear) {
+          continue;
+        }
+        for (odb::dbBox* geom : pin->getGeometry()) {
+          polygon_boxes.insert(geom);
+        }
+
+        transform.apply(polygon);
+        points = polygon.getPoints();
+        Polygon45Set pin_set;
+        pin_set.insert(Polygon45(points.begin(), points.end()));
+        shapes_45[layer].insert(pin_set);
+
+        // create iterm nodes, one on each trapezoid of the polygon
+        std::vector<Polygon45> pieces;
+        pin_set.get_trapezoids(pieces);
+        for (const Polygon45& piece : pieces) {
+          has_routing_term = true;
+
+          // a trapezoid of a vertical slicing holds the center of its box
+          auto center = std::make_unique<TerminalNode>(
+              odb::geom::getEnclosingRect(piece), layer);
+          terminals.push_back(center.get());
+
+          link_terminal(center.get(), layer);
+
+          nodes_[layer].push_back(std::move(center));
+        }
+      }
+
       for (auto* geom : mpin->getGeometry()) {
+        if (polygon_boxes.contains(geom)) {
+          continue;
+        }
         const auto pin_shapes = generatePolygonsFromBox(geom, transform);
         if (pin_shapes.empty()) {
           continue;
         }
 
         for (const auto& [layer, shapes] : pin_shapes) {
-          shapes_by_layer[layer] += shapes;
+          shapes_by_layer[layer].insert(shapes);
         }
 
         if (geom->isVia()) {
@@ -279,8 +415,7 @@ IRNetwork::generatePolygonsFromITerms(std::vector<TerminalNode*>& terminals)
               auto center = std::make_unique<TerminalNode>(pin_shape, layer);
               terminals.push_back(center.get());
 
-              connections_.push_back(std::make_unique<TermConnection>(
-                  base_node.get(), center.get()));
+              link_terminal(center.get(), layer);
 
               nodes_[layer].push_back(std::move(center));
             }
@@ -297,8 +432,7 @@ IRNetwork::generatePolygonsFromITerms(std::vector<TerminalNode*>& terminals)
           auto center = std::make_unique<TerminalNode>(pin_shape, layer);
           terminals.push_back(center.get());
 
-          connections_.push_back(
-              std::make_unique<TermConnection>(base_node.get(), center.get()));
+          link_terminal(center.get(), layer);
 
           nodes_[layer].push_back(std::move(center));
         }
@@ -318,22 +452,20 @@ IRNetwork::generatePolygonsFromITerms(std::vector<TerminalNode*>& terminals)
   return shapes_by_layer;
 }
 
-IRNetwork::LayerMap<IRNetwork::Polygon90Set>
+IRNetwork::LayerMap<odb::geom::BoostPolygon90Set>
 IRNetwork::generatePolygonsFromBTerms(std::vector<TerminalNode*>& terminals)
 {
-  using boost::polygon::operators::operator+=;
-
   const utl::DebugScopedTimer timer(
       logger_, utl::PSM, "timer", 1, "Generate shapes from BTerms: {}");
 
-  LayerMap<Polygon90Set> shapes_by_layer;
+  LayerMap<odb::geom::BoostPolygon90Set> shapes_by_layer;
 
   for (auto* bterm : net_->getBTerms()) {
     for (auto* bpin : bterm->getBPins()) {
       for (odb::dbBox* geom : bpin->getBoxes()) {
         for (const auto& [layer, shapes] :
              generatePolygonsFromBox(geom, odb::dbTransform())) {
-          shapes_by_layer[layer] += shapes;
+          shapes_by_layer[layer].insert(shapes);
         }
 
         if (geom->isVia()) {
@@ -361,14 +493,12 @@ IRNetwork::generatePolygonsFromBTerms(std::vector<TerminalNode*>& terminals)
 
 void IRNetwork::processPolygonToRectangles(
     odb::dbTechLayer* layer,
-    const IRNetwork::Polygon90& polygon,
+    const odb::geom::BoostPolygon90WithHoles& polygon,
     const IRNetwork::TerminalTree& terminals,
     std::vector<std::unique_ptr<Shape>>& new_shapes,
     std::vector<std::unique_ptr<Node>>& new_nodes,
     std::map<Shape*, std::set<Node*>>& terminal_connections)
 {
-  using boost::polygon::operators::operator+=;
-
   auto get_layer_orientation
       = [](odb::dbTechLayer* layer) -> boost::polygon::orientation_2d_enum {
     switch (layer->getDirection().getValue()) {
@@ -382,8 +512,8 @@ void IRNetwork::processPolygonToRectangles(
     return boost::polygon::orientation_2d_enum::VERTICAL;
   };
 
-  Polygon90Set shape_poly_set;
-  shape_poly_set += polygon;
+  odb::geom::BoostPolygon90Set shape_poly_set;
+  shape_poly_set.insert(polygon);
 
   std::vector<odb::Rect> search_rect_shapes;
   shape_poly_set.get_rectangles(search_rect_shapes,
@@ -409,7 +539,7 @@ void IRNetwork::processPolygonToRectangles(
       }
     }
 
-    auto shape = std::make_unique<Shape>(rect, layer);
+    auto shape = std::make_unique<RectShape>(rect, layer);
 
     // Create starter nodes
     nodes.emplace(rect.center());
@@ -441,6 +571,81 @@ void IRNetwork::processPolygonToRectangles(
   }
 }
 
+void IRNetwork::processPolygonToTrapezoids(
+    odb::dbTechLayer* layer,
+    const Polygon45WithHoles& polygon,
+    const IRNetwork::TerminalTree& terminals,
+    std::vector<std::unique_ptr<Shape>>& new_shapes,
+    std::vector<std::unique_ptr<Node>>& new_nodes,
+    std::map<Shape*, std::set<Node*>>& terminal_connections)
+{
+  Polygon45Set shape_poly_set;
+  shape_poly_set.insert(polygon);
+
+  std::vector<Polygon45> trapezoids;
+  shape_poly_set.get_trapezoids(trapezoids);
+
+  // a piece that is a rectangle is held as a RectShape, only the others
+  // need the polygon
+  std::vector<std::unique_ptr<Shape>> shapes;
+  std::vector<std::vector<odb::Point>> shape_points;
+  for (const Polygon45& trapezoid : trapezoids) {
+    std::vector<odb::Point> points;
+    for (const auto& pt : trapezoid) {
+      points.emplace_back(pt.x(), pt.y());
+    }
+    if (!points.empty() && points.front() != points.back()) {
+      points.push_back(points.front());
+    }
+    const odb::Polygon piece(points);
+    if (piece.isRect()) {
+      shapes.push_back(
+          std::make_unique<RectShape>(piece.getEnclosingRect(), layer));
+    } else {
+      shapes.push_back(std::make_unique<PolygonShape>(piece, layer));
+    }
+    shape_points.push_back(piece.getPoints());
+  }
+
+  for (std::size_t i = 0; i < shapes.size(); i++) {
+    auto& shape = shapes[i];
+
+    // Create starter nodes, at the center of the piece and of each edge it
+    // shares with a later piece
+    std::set<odb::Point> nodes;
+    nodes.emplace(shape->getShape().center());
+    for (std::size_t j = i + 1; j < shapes.size(); j++) {
+      if (!shape->getShape().intersects(shapes[j]->getShape())) {
+        continue;
+      }
+      for (const odb::Point& pt :
+           getSharedEdgeCenters(shape_points[i], shape_points[j])) {
+        nodes.emplace(pt);
+      }
+    }
+    for (const auto& pt : nodes) {
+      new_nodes.push_back(std::make_unique<Node>(pt, layer));
+    }
+
+    // check terminals
+    auto& shape_terms = terminal_connections[shape.get()];
+    for (auto itr = terminals.qbegin(
+             boost::geometry::index::intersects(shape->getShape())
+             && boost::geometry::index::satisfies([layer](const auto& other) {
+                  return layer == other->getLayer();
+                }));
+         itr != terminals.qend();
+         itr++) {
+      auto* node = *itr;
+      if (shape->contains(node->getPoint())) {
+        shape_terms.insert(node);
+      }
+    }
+
+    new_shapes.push_back(std::move(shape));
+  }
+}
+
 IRNetwork::TerminalTree IRNetwork::getTerminalTree(
     const std::vector<TerminalNode*>& terminals) const
 {
@@ -452,35 +657,56 @@ IRNetwork::TerminalTree IRNetwork::getTerminalTree(
 
 void IRNetwork::generateRoutingLayerShapesAndNodes()
 {
-  using boost::polygon::operators::operator+=;
-
   const utl::DebugScopedTimer timer(
       logger_, utl::PSM, "timer", 1, "Generate shapes: {}");
 
-  LayerMap<Polygon90Set> shapes_by_layer;
+  LayerMap<odb::geom::BoostPolygon90Set> shapes_by_layer;
+  LayerMap<Polygon45Set> shapes_45_by_layer;
 
   // Collect wires
   for (odb::dbSWire* wire : net_->getSWires()) {
-    for (const auto& [layer, shapes] : generatePolygonsFromSWire(wire)) {
-      shapes_by_layer[layer] += shapes;
+    for (const auto& [layer, shapes] :
+         generatePolygonsFromSWire(wire, shapes_45_by_layer)) {
+      shapes_by_layer[layer].insert(shapes);
     }
   }
 
   std::vector<TerminalNode*> terminals;
   // Collect ITerms
-  for (const auto& [layer, shapes] : generatePolygonsFromITerms(terminals)) {
-    shapes_by_layer[layer] += shapes;
+  for (const auto& [layer, shapes] :
+       generatePolygonsFromITerms(terminals, shapes_45_by_layer)) {
+    shapes_by_layer[layer].insert(shapes);
   }
 
   // Collect BTerms
   for (const auto& [layer, shapes] : generatePolygonsFromBTerms(terminals)) {
-    shapes_by_layer[layer] += shapes;
+    shapes_by_layer[layer].insert(shapes);
   }
 
   const TerminalTree terminal_nodes = getTerminalTree(terminals);
 
+  // A layer with shapes with 45 degree edges is merged with them and sliced
+  // into trapezoids rather than rectangles
+  std::vector<std::pair<odb::dbTechLayer*, Polygon45WithHoles>>
+      all_poly_45_shapes;
+  for (auto& [layer, shapes_45] : shapes_45_by_layer) {
+    const auto find_layer = shapes_by_layer.find(layer);
+    if (find_layer != shapes_by_layer.end()) {
+      shapes_45.insert(find_layer->second);
+      shapes_by_layer.erase(find_layer);
+    }
+
+    std::vector<Polygon45WithHoles> shape_polygons;
+    shapes_45.get_polygons_with_holes(shape_polygons);
+    for (const Polygon45WithHoles& shape_poly : shape_polygons) {
+      all_poly_45_shapes.emplace_back(layer, shape_poly);
+    }
+  }
+  shapes_45_by_layer.clear();
+
   // Simplify shapes
-  std::vector<std::pair<odb::dbTechLayer*, Polygon90>> all_poly_shapes;
+  std::vector<std::pair<odb::dbTechLayer*, odb::geom::BoostPolygon90WithHoles>>
+      all_poly_shapes;
   for (auto& [layer, shapes] : shapes_by_layer) {
     const utl::DebugScopedTimer layer_timer(
         logger_,
@@ -490,7 +716,7 @@ void IRNetwork::generateRoutingLayerShapesAndNodes()
         fmt::format("Convert shapes to polygons shapes on {}: {{}}",
                     layer->getName()));
 
-    std::vector<Polygon90> shape_polygons;
+    std::vector<odb::geom::BoostPolygon90WithHoles> shape_polygons;
     shapes.get_polygons(shape_polygons);
 
     debugPrint(logger_,
@@ -522,6 +748,14 @@ void IRNetwork::generateRoutingLayerShapesAndNodes()
   std::map<Shape*, std::set<Node*>> shape_term_nodes;
   for (const auto& [layer, shape_poly] : all_poly_shapes) {
     processPolygonToRectangles(layer,
+                               shape_poly,
+                               terminal_nodes,
+                               poly_shapes,
+                               poly_nodes,
+                               shape_term_nodes);
+  }
+  for (const auto& [layer, shape_poly] : all_poly_45_shapes) {
+    processPolygonToTrapezoids(layer,
                                shape_poly,
                                terminal_nodes,
                                poly_shapes,
@@ -614,8 +848,13 @@ void IRNetwork::generateCutNodesForSBox(
 IRNetwork::ShapeTree IRNetwork::getShapeTree(odb::dbTechLayer* layer) const
 {
   // generate Rtree of shapes to associate with vias
+  const auto find_layer = shapes_.find(layer);
+  if (find_layer == shapes_.end()) {
+    return ShapeTree();
+  }
+
   std::vector<Shape*> tree_values;
-  for (const auto& shape : shapes_.at(layer)) {
+  for (const auto& shape : find_layer->second) {
     tree_values.emplace_back(shape.get());
   }
   ShapeTree tree(tree_values.begin(), tree_values.end());
@@ -625,8 +864,13 @@ IRNetwork::ShapeTree IRNetwork::getShapeTree(odb::dbTechLayer* layer) const
 IRNetwork::NodeTree IRNetwork::getNodeTree(odb::dbTechLayer* layer) const
 {
   // generate Rtree of shapes to associate with vias
+  const auto find_layer = nodes_.find(layer);
+  if (find_layer == nodes_.end()) {
+    return NodeTree();
+  }
+
   std::vector<Node*> tree_values;
-  for (const auto& node : nodes_.at(layer)) {
+  for (const auto& node : find_layer->second) {
     tree_values.emplace_back(node.get());
   }
   NodeTree tree(tree_values.begin(), tree_values.end());
@@ -709,10 +953,13 @@ std::set<Node*> IRNetwork::getSharedShapeNodes() const
     const auto layer_shapes = getShapeTree(layer);
 
     for (const auto& node : nodes) {
-      const Point pt(node->getPoint().x(), node->getPoint().y());
-      const auto shapes = std::distance(
+      // the box of a shape with 45 degree edges can hold a node that is
+      // only in the shape next to it
+      const odb::Point& pt = node->getPoint();
+      const auto shapes = std::count_if(
           layer_shapes.qbegin(boost::geometry::index::intersects(pt)),
-          layer_shapes.qend());
+          layer_shapes.qend(),
+          [&pt](const Shape* shape) { return shape->contains(pt); });
       if (shapes > 1) {
         shared_nodes.insert(node.get());
       }
@@ -804,7 +1051,7 @@ void IRNetwork::sortNodes()
 
   for (auto& [layer, nodes] : nodes_) {
     std::ranges::stable_sort(nodes, [](const auto& lhs, const auto& rhs) {
-      return lhs->compare(rhs);
+      return lhs->compare(rhs) < 0;
     });
   }
 }
@@ -813,10 +1060,9 @@ void IRNetwork::sortConnections()
 {
   const utl::DebugScopedTimer timer(
       logger_, utl::PSM, "timer", 1, "Sorting connections: {}");
-  std::ranges::stable_sort(
-      connections_,
-
-      [](const auto& lhs, const auto& rhs) { return lhs->compare(rhs); });
+  std::ranges::stable_sort(connections_, [](const auto& lhs, const auto& rhs) {
+    return lhs->compare(rhs);
+  });
 }
 
 int IRNetwork::getEffectiveNumberOfCuts(const odb::dbShape& shape) const
@@ -1109,12 +1355,16 @@ void IRNetwork::connectLayerNodes()
 
 odb::dbTechLayer* IRNetwork::getTopLayer() const
 {
+  odb::dbTechLayer* bstop = nodes_.begin()->first;
+  if (bstop->isBackside()) {
+    return bstop;
+  }
   return nodes_.rbegin()->first;
 }
 
-std::set<odb::dbTechLayer*> IRNetwork::getLayers() const
+odb::PtrSet<odb::dbTechLayer> IRNetwork::getLayers() const
 {
-  std::set<odb::dbTechLayer*> layers;
+  odb::PtrSet<odb::dbTechLayer> layers;
   for (const auto& [layer, nodes] : nodes_) {
     layers.insert(layer);
   }
@@ -1128,7 +1378,7 @@ std::set<odb::dbTechLayer*> IRNetwork::getLayers() const
 
 const std::vector<std::unique_ptr<Node>>& IRNetwork::getTopLayerNodes() const
 {
-  return nodes_.rbegin()->second;
+  return nodes_.at(getTopLayer());
 }
 
 IRNetwork::NodeTree IRNetwork::getTopLayerNodeTree() const
@@ -1136,12 +1386,13 @@ IRNetwork::NodeTree IRNetwork::getTopLayerNodeTree() const
   return getNodeTree(getTopLayer());
 }
 
-std::map<odb::dbInst*, Node::NodeSet> IRNetwork::getInstanceNodeMapping() const
+odb::PtrMap<odb::dbInst, Node::NodeSet> IRNetwork::getInstanceNodeMapping()
+    const
 {
   const utl::DebugScopedTimer timer(
       logger_, utl::PSM, "timer", 1, "Generate instance node map: {}");
 
-  std::map<odb::dbInst*, Node::NodeSet> inst_nodes;
+  odb::PtrMap<odb::dbInst, Node::NodeSet> inst_nodes;
   for (const auto& node : iterm_nodes_) {
     odb::dbITerm* iterm = node->getITerm();
     odb::dbInst* inst = iterm->getInst();
@@ -1275,10 +1526,10 @@ Node::NodeSet IRNetwork::getBPinShapeNodes() const
     return {};
   }
 
-  std::map<odb::dbTechLayer*, std::set<odb::Rect>> nodes;
+  odb::PtrMap<odb::dbTechLayer, std::set<odb::Rect>> nodes;
   for (const auto& bpin : bpin_nodes_) {
     if (bpin->shouldConnect()) {
-      nodes[bpin->getLayer()].insert(bpin->getShape());
+      nodes[bpin->getLayer()].insert(bpin->getBBox());
     }
   }
 
@@ -1297,6 +1548,21 @@ Node::NodeSet IRNetwork::getBPinShapeNodes() const
   }
 
   return pin_nodes;
+}
+
+void IRNetwork::clearVisitedNodes()
+{
+  for (const auto& [layer, nodes] : nodes_) {
+    for (const auto& node : nodes) {
+      node->setVisited(false);
+    }
+  }
+  for (const auto& node : iterm_nodes_) {
+    node->setVisited(false);
+  }
+  for (const auto& node : bpin_nodes_) {
+    node->setVisited(false);
+  }
 }
 
 }  // namespace psm

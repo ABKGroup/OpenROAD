@@ -5,18 +5,30 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <memory>
+#include <string>
 #include <vector>
 
-#include "gui/heatMap.h"
 #include "odb/db.h"
 #include "odb/dbTypes.h"
 #include "utl/Logger.h"
+#include "web/heatMap.h"
 
 namespace grt {
 
+web::HeatMapSourceHandle registerRoutingCongestionHeatMapSource(
+    utl::Logger* logger,
+    odb::dbDatabase* db)
+{
+  return web::registerHeatMapSource(
+      "Routing Congestion", "Routing", "RoutingCongestion", [logger, db]() {
+        return std::make_shared<RoutingCongestionDataSource>(logger, db);
+      });
+}
+
 RoutingCongestionDataSource::RoutingCongestionDataSource(utl::Logger* logger,
                                                          odb::dbDatabase* db)
-    : gui::GlobalRoutingDataSource(logger,
+    : web::GlobalRoutingDataSource(logger,
                                    "Routing Congestion",
                                    "Routing",
                                    "RoutingCongestion"),

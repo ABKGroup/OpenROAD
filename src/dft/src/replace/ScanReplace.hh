@@ -10,6 +10,7 @@
 
 #include "db_sta/dbSta.hh"
 #include "odb/db.h"
+#include "rsz/Resizer.hh"
 #include "sta/Liberty.hh"
 #include "utl/Logger.h"
 
@@ -69,6 +70,7 @@ class ScanReplace
  public:
   ScanReplace(odb::dbDatabase* db,
               sta::dbSta* sta,
+              rsz::Resizer* resizer,
               utl::Logger* logger,
               const ScanArchitectConfig* architect_config = nullptr);
 
@@ -110,6 +112,7 @@ class ScanReplace
 
   odb::dbDatabase* db_;
   sta::dbSta* sta_;
+  rsz::Resizer* resizer_;
   utl::Logger* logger_;
   sta::dbNetwork* db_network_;
   const ScanArchitectConfig* architect_config_{nullptr};

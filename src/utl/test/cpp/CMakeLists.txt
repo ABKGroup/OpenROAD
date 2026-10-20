@@ -55,3 +55,39 @@ gtest_discover_tests(TestSuppressStdout
 add_dependencies(build_and_test
   TestSuppressStdout
 )
+
+add_executable(TestServiceRegistry TestServiceRegistry.cpp)
+
+target_link_libraries(TestServiceRegistry ${TEST_LIBS})
+
+gtest_discover_tests(TestServiceRegistry
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_dependencies(build_and_test
+  TestServiceRegistry
+)
+
+add_executable(TestCpuTopology TestCpuTopology.cpp)
+
+target_link_libraries(TestCpuTopology ${TEST_LIBS})
+
+gtest_discover_tests(TestCpuTopology
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_dependencies(build_and_test
+  TestCpuTopology
+)
+
+add_executable(TestCsvParser TestCsvParser.cpp)
+
+target_link_libraries(TestCsvParser ${TEST_LIBS})
+
+gtest_discover_tests(TestCsvParser
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_dependencies(build_and_test
+  TestCsvParser
+)

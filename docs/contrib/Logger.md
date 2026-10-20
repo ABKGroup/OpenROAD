@@ -419,6 +419,22 @@ Regression tests should not have any `UKN-0000` messages in their ok
 files. A simple grep should indicate that you still have pending calls
 to pre-logger error/warn functions.
 
+The tool `BUILD` file must also list `//src/utl` in the `deps` of the
+tool library so it can find the logger header files.
+
+``` starlark
+cc_library(
+    name = "<library_target>",
+    ...
+    deps = [
+        "//src/utl",
+    ],
+)
+```
+
+### CMake (deprecated)
+
+CMake is deprecated and will be removed on Nov. 1, 2026.
 The `cmake` file for the tool must also be updated to include spdlog in
 the link libraries so it can find the header files if they are not in
 the normal system directories.
@@ -439,11 +455,11 @@ target_link_libraries(<library_target>
 ## Useful Information
 As tool developers, we can also choose to include useful information to the end user - 
 be it in the form on debugging tips, or solutions to fix the errors/warnings. We compile
-a list of such errors in this [table](../user/MessagesFinal.md). The good thing about
+a list of such errors in this [table](https://openroad.readthedocs.io/en/latest/user/MessagesFinal.html). The good thing about
 this page is the ability to encode rich formatting using Markdown, enabling you
 to convey more information than what can be said from the limited messages in code.
 
-To format the information, refer to this [sample GRT information file](../main/src/grt/doc/messages/0118.md).
+To format the information, refer to this [sample GRT information file](../../src/grt/doc/messages/0118.md).
 In addition, make sure you create the corresponding `docs/messages` folder under the `tool` folder, 
 before creating your Markdown file with the corresponding `NUM`. 
 

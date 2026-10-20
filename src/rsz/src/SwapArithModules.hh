@@ -9,6 +9,7 @@
 
 #include "db_sta/dbNetwork.hh"
 #include "db_sta/dbSta.hh"
+#include "odb/PtrSetMap.h"
 #include "odb/db.h"
 #include "rsz/Resizer.hh"
 #include "sta/MinMax.hh"
@@ -41,30 +42,25 @@ class SwapArithModules : public sta::dbStaState
 
   virtual bool replaceArithModules(int path_count,
                                    const std::string& target,
-                                   float slack_threshold)
-      = 0;
+                                   float slack_threshold) = 0;
   virtual void collectArithInstsOnPath(const sta::Path* path,
-                                       std::set<odb::dbModInst*>& arithInsts)
+                                       odb::PtrSet<odb::dbModInst>& arithInsts)
       = 0;
   virtual bool isArithInstance(const sta::Instance* inst,
-                               odb::dbModInst*& mod_inst)
-      = 0;
+                               odb::dbModInst*& mod_inst) = 0;
   virtual bool hasArithOperatorProperty(const odb::dbModInst* mod_inst) = 0;
   virtual void findCriticalInstances(int path_count,
                                      const std::string& target,
                                      float slack_threshold,
-                                     std::set<odb::dbModInst*>& insts)
-      = 0;
-  virtual bool doSwapInstances(std::set<odb::dbModInst*>& insts,
-                               const std::string& target)
-      = 0;
+                                     odb::PtrSet<odb::dbModInst>& insts) = 0;
+  virtual bool doSwapInstances(odb::PtrSet<odb::dbModInst>& insts,
+                               const std::string& target) = 0;
 
  protected:
   virtual void init() = 0;
   virtual void produceNewModuleName(const std::string& old_name,
                                     std::string& new_name,
-                                    const std::string& target)
-      = 0;
+                                    const std::string& target) = 0;
 
   // Member variables
   Resizer* resizer_;

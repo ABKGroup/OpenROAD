@@ -5,20 +5,15 @@
 
 #include <string>
 
-#include "AbstractRoutingCongestionDataSource.h"
-#include "gui/heatMap.h"
 #include "odb/db.h"
+#include "web/heatMap.h"
 
 namespace grt {
 
-class RoutingCongestionDataSource : public gui::GlobalRoutingDataSource,
-                                    public AbstractRoutingCongestionDataSource
+class RoutingCongestionDataSource : public web::GlobalRoutingDataSource
 {
  public:
   RoutingCongestionDataSource(utl::Logger* logger, odb::dbDatabase* db);
-
-  void registerHeatMap() override { gui::HeatMapDataSource::registerHeatMap(); }
-  void update() override { gui::HeatMapDataSource::update(); }
 
  protected:
   bool populateMap() override;
@@ -64,5 +59,9 @@ class RoutingCongestionDataSource : public gui::GlobalRoutingDataSource,
   MapType type_;
   double max_;
 };
+
+web::HeatMapSourceHandle registerRoutingCongestionHeatMapSource(
+    utl::Logger* logger,
+    odb::dbDatabase* db);
 
 }  // namespace grt

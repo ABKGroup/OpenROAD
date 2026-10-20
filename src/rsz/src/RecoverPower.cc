@@ -16,25 +16,21 @@
 #include "est/EstimateParasitics.h"
 #include "odb/db.h"
 #include "rsz/Resizer.hh"
+#include "sta/ContainerHelpers.hh"
 #include "sta/Delay.hh"
-#include "sta/Fuzzy.hh"
 #include "sta/Graph.hh"
 #include "sta/GraphClass.hh"
 #include "sta/GraphDelayCalc.hh"
-#include "sta/InputDrive.hh"
 #include "sta/Liberty.hh"
 #include "sta/LibertyClass.hh"
 #include "sta/NetworkClass.hh"
 #include "sta/Path.hh"
 #include "sta/PathExpanded.hh"
-#include "sta/PortDirection.hh"
 #include "sta/Sdc.hh"
 #include "sta/TimingArc.hh"
 #include "utl/Logger.h"
 
 namespace rsz {
-
-using namespace sta;  // NOLINT
 
 using std::pair;
 using std::string;
@@ -62,22 +58,22 @@ bool RecoverPower::recoverPower(const float recover_power_percent, bool verbose)
   init();
   constexpr int digits = 3;
   resize_count_ = 0;
-  resizer_->buffer_moved_into_core_ = false;
 
   // Sort failing endpoints by slack.
-  VertexSet& endpoints = sta_->endpoints();
-  VertexSeq ends_with_slack;
-  for (Vertex* end : endpoints) {
-    const Slack end_slack = sta_->slack(end, max_);
+  sta::VertexSet& endpoints = sta_->endpoints();
+  sta::VertexSeq ends_with_slack;
+  for (sta::Vertex* end : endpoints) {
+    const sta::Slack end_slack = sta_->slack(end, max_);
     if (end_slack > setup_slack_margin_
         && end_slack < setup_slack_max_margin_) {
       ends_with_slack.push_back(end);
     }
   }
 
-  std::ranges::sort(ends_with_slack, [this](Vertex* end1, Vertex* end2) {
-    return sta_->slack(end1, max_) > sta_->slack(end2, max_);
-  });
+  std::ranges::sort(ends_with_slack,
+                    [this](sta::Vertex* end1, sta::Vertex* end2) {
+                      return sta_->slack(end1, max_) > sta_->slack(end2, max_);
+                    });
 
   debugPrint(logger_,
              RSZ,
@@ -109,8 +105,8 @@ bool RecoverPower::recoverPower(const float recover_power_percent, bool verbose)
   est::IncrementalParasiticsGuard guard(estimate_parasitics_);
   for (sta::Vertex* end : ends_with_slack) {
     resizer_->journalBegin();
-    const Slack end_slack_before = sta_->slack(end, max_);
-    Slack worst_slack_after;
+    const sta::Slack end_slack_before = sta_->slack(end, max_);
+    sta::Slack worst_slack_after;
     //=====================================================================
     // Just a counter to know when to break out
     end_index++;
@@ -133,9 +129,9 @@ bool RecoverPower::recoverPower(const float recover_power_percent, bool verbose)
     sta::Path* end_path = sta_->vertexWorstSlackPath(end, max_);
     sta::Vertex* const changed = recoverPower(end_path, end_slack_before);
     if (changed) {
-      estimate_parasitics_->updateParasitics(true);
+      estimate_parasitics_->updateParasitics();
       sta_->findRequireds();
-      const Slack end_slack_after = sta_->slack(end, max_);
+      const sta::Slack end_slack_after = sta_->slack(end, max_);
 
       sta_->worstSlack(max_, worst_slack_after, worst_vertex);
 
@@ -151,13 +147,14 @@ bool RecoverPower::recoverPower(const float recover_power_percent, bool verbose)
                  "recover_power",
                  2,
                  "slack = {} worst_slack = {} better = {}",
-                 delayAsString(end_slack_after, sta_, digits),
-                 delayAsString(worst_slack_after, sta_, digits),
+                 sta::delayAsString(end_slack_after, digits, sta_),
+                 sta::delayAsString(worst_slack_after, digits, sta_),
                  better ? "save" : "");
 
       if (better) {
         failed_move_threshold = 0;
         resizer_->journalEnd();
+        resize_count_++;
         debugPrint(logger_,
                    RSZ,
                    "recover_power",
@@ -165,8 +162,8 @@ bool RecoverPower::recoverPower(const float recover_power_percent, bool verbose)
                    "{}/{} Resize for power Slack change {} -> {}",
                    end_index,
                    ends_with_slack.size(),
-                   worst_slack_before,
-                   worst_slack_after);
+                   sta::delayAsString(worst_slack_before, digits, sta_),
+                   sta::delayAsString(worst_slack_after, digits, sta_));
         if (resizer_->overMaxArea()) {
           break;
         }
@@ -182,6 +179,7 @@ bool RecoverPower::recoverPower(const float recover_power_percent, bool verbose)
                         "power recovery",
                         failed_move_threshold_limit_);
           resizer_->journalEnd();
+          resize_count_++;
           break;
         }
         resizer_->journalRestore();
@@ -192,8 +190,8 @@ bool RecoverPower::recoverPower(const float recover_power_percent, bool verbose)
                    "{}/{} Undo resize for power Slack change {} -> {}",
                    end_index,
                    ends_with_slack.size(),
-                   worst_slack_before,
-                   worst_slack_after);
+                   sta::delayAsString(worst_slack_before, digits, sta_),
+                   sta::delayAsString(worst_slack_after, digits, sta_));
       }
     } else {
       resizer_->journalEnd();
@@ -224,14 +222,18 @@ sta::Vertex* RecoverPower::recoverPower(const sta::Pin* end_pin)
   init();
   resize_count_ = 0;
 
-  Vertex* vertex = graph_->pinLoadVertex(end_pin);
-  const Slack slack = sta_->slack(vertex, max_);
-  const Path* path = sta_->vertexWorstSlackPath(vertex, max_);
-  Vertex* drvr_vertex;
+  sta::Vertex* vertex = graph_->pinLoadVertex(end_pin);
+  const sta::Slack slack = sta_->slack(vertex, max_);
+  const sta::Path* path = sta_->vertexWorstSlackPath(vertex, max_);
+  sta::Vertex* drvr_vertex;
 
   {
     est::IncrementalParasiticsGuard guard(estimate_parasitics_);
     drvr_vertex = recoverPower(path, slack);
+  }
+  // No accept/reject journal here: a returned vertex is one kept downsize.
+  if (drvr_vertex != nullptr) {
+    resize_count_++;
   }
 
   if (resize_count_ > 0) {
@@ -244,7 +246,7 @@ sta::Vertex* RecoverPower::recoverPower(const sta::Pin* end_pin)
 sta::Vertex* RecoverPower::recoverPower(const sta::Path* path,
                                         const sta::Slack path_slack)
 {
-  PathExpanded expanded(path, sta_);
+  sta::PathExpanded expanded(path, sta_);
   sta::Vertex* changed = nullptr;
 
   if (expanded.size() > 1) {
@@ -260,10 +262,10 @@ sta::Vertex* RecoverPower::recoverPower(const sta::Path* path,
       const sta::Pin* path_pin = path->pin(sta_);
       if (i > 0 && path_vertex->isDriver(network_)
           && !network_->isTopLevelPort(path_pin)) {
-        const TimingArc* prev_arc = path->prevArc(sta_);
-        const TimingArc* corner_arc = prev_arc->sceneArc(lib_ap);
-        const Edge* prev_edge = path->prevEdge(sta_);
-        const Delay load_delay
+        const sta::TimingArc* prev_arc = path->prevArc(sta_);
+        const sta::TimingArc* corner_arc = prev_arc->sceneArc(lib_ap);
+        const sta::Edge* prev_edge = path->prevEdge(sta_);
+        const sta::Delay load_delay
             = graph_->arcDelay(prev_edge, prev_arc, dcalc_ap_index)
               // Remove intrinsic delay to find load dependent delay.
               - corner_arc->intrinsicDelay();
@@ -274,7 +276,7 @@ sta::Vertex* RecoverPower::recoverPower(const sta::Path* path,
                    3,
                    "{} load_delay = {}",
                    path_vertex->name(network_),
-                   delayAsString(load_delay, sta_, 3));
+                   delayAsString(load_delay, 3, sta_));
       }
     }
 
@@ -293,7 +295,7 @@ sta::Vertex* RecoverPower::recoverPower(const sta::Path* path,
       const sta::Path* drvr_path = expanded.path(drvr_index);
       sta::Vertex* drvr_vertex = drvr_path->vertex(sta_);
       // If we already tried this vertex and got a worse result, skip it.
-      if (bad_vertices_.find(drvr_vertex) != bad_vertices_.end()) {
+      if (bad_vertices_.contains(drvr_vertex)) {
         continue;
       }
       const sta::Pin* drvr_pin = drvr_vertex->pin();
@@ -320,18 +322,19 @@ sta::Vertex* RecoverPower::recoverPower(const sta::Path* path,
 
 bool RecoverPower::downsizeDrvr(const sta::Path* drvr_path,
                                 const int drvr_index,
-                                PathExpanded* expanded,
+                                sta::PathExpanded* expanded,
                                 const bool only_same_size_swap,
                                 const sta::Slack path_slack)
 {
-  const Pin* drvr_pin = drvr_path->pin(this);
-  Instance* drvr = network_->instance(drvr_pin);
+  const sta::Pin* drvr_pin = drvr_path->pin(this);
+  sta::Instance* drvr = network_->instance(drvr_pin);
   const float load_cap = graph_delay_calc_->loadCap(
       drvr_pin, drvr_path->scene(sta_), drvr_path->minMax(sta_));
-  const int in_index = drvr_index - 1;
-  const sta::Path* in_path = expanded->path(in_index);
-  const sta::Pin* in_pin = in_path->pin(sta_);
-  const sta::LibertyPort* in_port = network_->libertyPort(in_pin);
+  const sta::TimingArc* in_arc = drvr_path->prevArc(sta_);
+  const sta::LibertyPort* in_port = in_arc ? in_arc->from() : nullptr;
+  if (in_port == nullptr) {
+    return false;
+  }
   if (!resizer_->dontTouch(drvr)) {
     float prev_drive = 0.0;
     if (drvr_index >= 2) {
@@ -344,15 +347,23 @@ bool RecoverPower::downsizeDrvr(const sta::Path* drvr_path,
         prev_drive = prev_drvr_port->driveResistance();
       }
     }
-    const LibertyPort* drvr_port = network_->libertyPort(drvr_pin);
-    const LibertyCell* downsize = downsizeCell(in_port,
-                                               drvr_port,
-                                               load_cap,
-                                               prev_drive,
-                                               drvr_path->scene(sta_),
-                                               drvr_path->minMax(sta_),
-                                               only_same_size_swap,
-                                               path_slack);
+    const sta::LibertyPort* drvr_port = network_->libertyPort(drvr_pin);
+    const sta::LibertyCell* downsize = downsizeCell(in_port,
+                                                    drvr_port,
+                                                    load_cap,
+                                                    prev_drive,
+                                                    drvr_path->scene(sta_),
+                                                    drvr_path->minMax(sta_),
+                                                    only_same_size_swap,
+                                                    path_slack);
+    // A fixed driver keeps its footprint, so it only takes a VT swap.
+    if (downsize != nullptr && resizer_->isFixed(drvr)) {
+      const sta::LibertyCellSeq vt_equiv_cells
+          = resizer_->getVTEquivCells(network_->libertyCell(drvr));
+      if (std::ranges::find(vt_equiv_cells, downsize) == vt_equiv_cells.end()) {
+        downsize = nullptr;
+      }
+    }
     if (downsize != nullptr) {
       debugPrint(logger_,
                  RSZ,
@@ -363,7 +374,7 @@ bool RecoverPower::downsizeDrvr(const sta::Path* drvr_path,
                  drvr_port->libertyCell()->name(),
                  downsize->name());
       if (resizer_->replaceCell(drvr, downsize, true)) {
-        resize_count_++;
+        // Counted by the caller only if the move is kept (journalEnd).
         return true;
       }
     }
@@ -380,43 +391,43 @@ bool RecoverPower::meetsSizeCriteria(const sta::LibertyCell* cell,
   }
   const odb::dbMaster* candidate_cell = db_network_->staToDb(candidate);
   const odb::dbMaster* curr_cell = db_network_->staToDb(cell);
-  if (candidate_cell->getWidth() <= curr_cell->getWidth()
-      && candidate_cell->getHeight() == curr_cell->getHeight()) {
-    return true;
-  }
-  return false;
+  return candidate_cell->getWidth() <= curr_cell->getWidth()
+         && candidate_cell->getHeight() == curr_cell->getHeight();
 }
 
-LibertyCell* RecoverPower::downsizeCell(const LibertyPort* in_port,
-                                        const LibertyPort* drvr_port,
-                                        const float load_cap,
-                                        const float prev_drive,
-                                        const Scene* scene,
-                                        const MinMax* min_max,
-                                        const bool match_size,
-                                        const Slack path_slack)
+sta::LibertyCell* RecoverPower::downsizeCell(const sta::LibertyPort* in_port,
+                                             const sta::LibertyPort* drvr_port,
+                                             const float load_cap,
+                                             const float prev_drive,
+                                             const sta::Scene* scene,
+                                             const sta::MinMax* min_max,
+                                             const bool match_size,
+                                             const sta::Slack path_slack)
 {
   const int lib_ap = scene->libertyIndex(min_max);
-  LibertyCell* cell = drvr_port->libertyCell();
-  LibertyCellSeq swappable_cells = resizer_->getSwappableCells(cell);
+  sta::LibertyCell* cell = drvr_port->libertyCell();
+  sta::LibertyCellSeq swappable_cells = resizer_->getSwappableCells(cell);
   constexpr double delay_margin = 1.5;  // Prevent overly aggressive downsizing
 
   if (!swappable_cells.empty()) {
-    const char* in_port_name = in_port->name();
-    const char* drvr_port_name = drvr_port->name();
-    sort(
+    const std::string& in_port_name = in_port->name();
+    const std::string& drvr_port_name = drvr_port->name();
+    sta::sort(
         &swappable_cells,
-        [=, this](const LibertyCell* cell1, const LibertyCell* cell2) {
-          const LibertyPort* port1 = const_cast<const LibertyPort*>(
-                                         cell1->findLibertyPort(drvr_port_name))
-                                         ->scenePort(lib_ap);
-          const LibertyPort* port2 = const_cast<const LibertyPort*>(
-                                         cell2->findLibertyPort(drvr_port_name))
-                                         ->scenePort(lib_ap);
+        [=, this](const sta::LibertyCell* cell1,
+                  const sta::LibertyCell* cell2) {
+          const sta::LibertyPort* port1
+              = const_cast<const sta::LibertyPort*>(
+                    cell1->findLibertyPort(drvr_port_name))
+                    ->scenePort(lib_ap);
+          const sta::LibertyPort* port2
+              = const_cast<const sta::LibertyPort*>(
+                    cell2->findLibertyPort(drvr_port_name))
+                    ->scenePort(lib_ap);
           const float drive1 = port1->driveResistance();
           const float drive2 = port2->driveResistance();
-          const ArcDelay intrinsic1 = port1->intrinsicDelay(this);
-          const ArcDelay intrinsic2 = port2->intrinsicDelay(this);
+          const sta::ArcDelay intrinsic1 = port1->intrinsicDelay(this);
+          const sta::ArcDelay intrinsic2 = port2->intrinsicDelay(this);
           return (std::tie(drive1, intrinsic2) < std::tie(drive2, intrinsic1));
         });
     const float drive = drvr_port->scenePort(lib_ap)->driveResistance();
@@ -424,10 +435,10 @@ LibertyCell* RecoverPower::downsizeCell(const LibertyPort* in_port,
         = resizer_->gateDelay(drvr_port, load_cap, scene, min_max)
           + (prev_drive * in_port->scenePort(lib_ap)->capacitance());
 
-    LibertyCell* best_cell = nullptr;
-    for (LibertyCell* swappable : swappable_cells) {
-      const LibertyCell* swappable_corner = swappable->sceneCell(lib_ap);
-      const LibertyPort* swappable_drvr
+    sta::LibertyCell* best_cell = nullptr;
+    for (sta::LibertyCell* swappable : swappable_cells) {
+      const sta::LibertyCell* swappable_corner = swappable->sceneCell(lib_ap);
+      const sta::LibertyPort* swappable_drvr
           = swappable_corner->findLibertyPort(drvr_port_name);
       const sta::LibertyPort* swappable_input
           = swappable_corner->findLibertyPort(in_port_name);
@@ -454,7 +465,7 @@ LibertyCell* RecoverPower::downsizeCell(const LibertyPort* in_port,
 int RecoverPower::fanout(sta::Vertex* vertex)
 {
   int fanout = 0;
-  VertexOutEdgeIterator edge_iter(vertex, graph_);
+  sta::VertexOutEdgeIterator edge_iter(vertex, graph_);
   while (edge_iter.hasNext()) {
     edge_iter.next();
     fanout++;
@@ -493,7 +504,7 @@ void RecoverPower::printProgress(int iteration, bool force, bool end) const
         itr_field,
         area_growth_percent,
         resize_count_,
-        delayAsString(wns, sta_, 3),
+        delayAsString(wns, 3, sta_),
         worst_vertex != nullptr ? worst_vertex->name(network_) : "");
   }
 

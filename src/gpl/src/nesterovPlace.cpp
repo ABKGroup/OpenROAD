@@ -10,11 +10,15 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <limits>
 #include <memory>
+#include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "AbstractGraphics.h"
+#include "clockBase.h"
 #include "nesterovBase.h"
 #include "odb/db.h"
 #include "placerBase.h"
@@ -32,6 +36,7 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
                              std::vector<std::shared_ptr<NesterovBase>>& nbVec,
                              std::shared_ptr<RouteBase> rb,
                              std::shared_ptr<TimingBase> tb,
+                             std::shared_ptr<ClockBase> cb,
                              std::unique_ptr<gpl::AbstractGraphics> graphics,
                              utl::Logger* log)
     : npVars_(npVars)
@@ -42,6 +47,7 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
   nbVec_ = nbVec;
   rb_ = std::move(rb);
   tb_ = std::move(tb);
+  cb_ = std::move(cb);
   log_ = log;
 
   db_cbk_ = std::make_unique<nesterovDbCbk>(this);
@@ -60,7 +66,8 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
                                      pbVec_,
                                      nbVec_,
                                      npVars_.debug_draw_bins,
-                                     npVars_.debug_inst);
+                                     npVars_.debug_inst,
+                                     npVars_.debug_pin);
   }
 
   init();
@@ -206,7 +213,7 @@ void NesterovPlace::init()
 
     // bin, FFT, wlen update with prevSLPCoordi.
     nb->updateDensityCenterPrevSLP();
-    nb->updateDensityForceBin();
+    nb->updateDensityFieldBin();
   }
 
   nbc_->updateWireLengthForceWA(wireLengthCoefX_, wireLengthCoefY_);
@@ -275,9 +282,11 @@ void NesterovPlace::updateIterGraphics(
     int timing_driven_count,
     bool& final_routability_image_saved)
 {
-  if (!graphics_ || !graphics_->enabled()) {
+  if (!graphics_ || !graphics_->enabled() || !npVars_.debug) {
     return;
   }
+
+  graphics_->addIter(iter, average_overflow_unscaled_);
 
   // For JPEG Saving
   updateDb();
@@ -291,11 +300,6 @@ void NesterovPlace::updateIterGraphics(
     rb_->updateRudyAverage(/*verbose=*/false);
   }
 
-  graphics_->addIter(iter, average_overflow_unscaled_);
-
-  if (!npVars_.debug) {
-    return;
-  }
   int debug_start_iter = npVars_.debug_start_iter;
   if (debug_start_iter == 0 || iter + 1 >= debug_start_iter) {
     bool update
@@ -305,11 +309,6 @@ void NesterovPlace::updateIterGraphics(
           = (iter == 0 || (iter + 1) % npVars_.debug_pause_iterations == 0);
       graphics_->cellPlot(pause);
     }
-  }
-
-  if (npVars_.debug_generate_images && iter == 0) {
-    std::string gif_path = fmt::format("{}/placement.gif", reports_dir);
-    placement_gif_key_ = graphics_->gifStart(gif_path);
   }
 
   if (npVars_.debug_generate_images && iter % 10 == 0) {
@@ -345,15 +344,13 @@ void NesterovPlace::updateIterGraphics(
           fmt::format("{}/1_routability_final_{:05d}.png",
                       routability_driven_dir,
                       iter),
-          label,
-          /* select_buffers = */ false);
+          label);
 
       graphics_->saveLabeledImage(
           fmt::format("{}/1_density_routability_final_{:05d}.png",
                       routability_driven_dir,
                       iter),
           label,
-          false,
           "Heat Maps/Placement Density");
 
       graphics_->saveLabeledImage(
@@ -361,7 +358,6 @@ void NesterovPlace::updateIterGraphics(
                       routability_driven_dir,
                       iter),
           label,
-          false,
           "Heat Maps/Estimated Congestion (RUDY)");
 
       graphics_->saveLabeledImage(
@@ -371,8 +367,7 @@ void NesterovPlace::updateIterGraphics(
           fmt::format("Iter {} |R: {} |T: {} final route",
                       iter,
                       routability_driven_revert_count,
-                      timing_driven_count),
-          false);
+                      timing_driven_count));
     }
     final_routability_image_saved = true;
   }
@@ -383,7 +378,8 @@ void NesterovPlace::runTimingDriven(int iter,
                                     int routability_driven_revert_count,
                                     int& timing_driven_count,
                                     int64_t& td_accumulated_delta_area,
-                                    bool is_routability_gpl_iter)
+                                    bool is_routability_gpl_iter,
+                                    int& virtual_cts_count)
 {
   // timing driven feature
   // if virtual, do reweight on timing-critical nets,
@@ -394,6 +390,14 @@ void NesterovPlace::runTimingDriven(int iter,
     // update db's instance location from current density coordinates
     updateDb();
 
+    if (cb_ && cb_->executeVirtualCts()) {
+      log_->info(GPL,
+                 164,
+                 "Virtual CTS iteration {}, overflow: {:.3f}.",
+                 ++virtual_cts_count,
+                 average_overflow_unscaled_);
+    }
+
     if (graphics_ && graphics_->enabled()) {
       graphics_->addTimingDrivenIter(iter);
 
@@ -403,8 +407,7 @@ void NesterovPlace::runTimingDriven(int iter,
             fmt::format("Iter {} |R: {} |T: {} before TD",
                         iter,
                         routability_driven_revert_count,
-                        timing_driven_count),
-            /* select_buffers = */ false);
+                        timing_driven_count));
       }
     }
 
@@ -447,13 +450,34 @@ void NesterovPlace::runTimingDriven(int iter,
       nb_gcells_before_td += nb->getGCells().size();
     }
 
-    bool shouldTdProceed = tb_->executeTimingDriven(virtual_td_iter);
+    bool enable_repair_timing = npVars_.timingDrivenIterCounter
+                                == tb_->getTimingNetWeightOverflowSize();
+
+    // Refresh host GNet boxes before handing control to rsz/STA — the GPU
+    // HPWL backend keeps them device-resident during the loop (no-op on the
+    // CPU backend, whose computeHpwl maintains them eagerly).
+    nbc_->mirrorNetBoxesToHost();
+
+    bool shouldTdProceed
+        = tb_->executeTimingDriven(virtual_td_iter, enable_repair_timing);
+    // fixPointers() may have moved the GPins the IO pins point at.
+    getTopLevelNB()->refreshIoPins();
+    // Device-side sync (no-op on the CPU path). Non-virtual iterations ran
+    // repair_design, whose callbacks created/destroyed/resized instances —
+    // the DeviceState topology must be rebuilt from the repaired host
+    // storage (this also reloads net weights and pin offsets). Virtual
+    // iterations only reweighted nets.
+    if (virtual_td_iter) {
+      nbc_->refreshDeviceNetWeights();
+    } else {
+      nbc_->rebuildDeviceState();
+    }
     // TODO remove fillers for TD iterations
     // for (auto& nesterov : nbVec_) {
     //   nesterov->cutFillerCells(nbc_->getDeltaArea());
     // }
 
-    nbVec_[0]->setTrueReprintIterHeader();
+    getTopLevelNB()->setTrueReprintIterHeader();
     ++timing_driven_count;
 
     const int nbc_total_gcells_delta
@@ -474,14 +498,12 @@ void NesterovPlace::runTimingDriven(int iter,
 
     if (graphics_ && graphics_->enabled() && npVars_.debug_generate_images) {
       updateDb();
-      bool select_buffers = !virtual_td_iter;
       graphics_->saveLabeledImage(
           fmt::format("{}/timing_{:05d}_1.png", timing_driven_dir, iter),
           fmt::format("Iter {} |R: {} |T: {} after TD",
                       iter,
                       routability_driven_revert_count,
-                      timing_driven_count),
-          select_buffers);
+                      timing_driven_count));
     }
 
     if (!virtual_td_iter) {
@@ -562,6 +584,64 @@ void NesterovPlace::runTimingDriven(int iter,
       npVars_.timingDrivenMode = false;
     }
   }
+}
+
+void NesterovPlace::enableIncrementalDensityPenaltyGuard()
+{
+  incremental_penalty_guard_requested_ = true;
+}
+
+void NesterovPlace::clearDivergence()
+{
+  num_region_diverged_ = 0;
+  divergeMsg_ = "";
+  divergeCode_ = 0;
+  for (auto& nb : nbVec_) {
+    nb->clearDivergence();
+  }
+}
+
+void NesterovPlace::applyDensityPenaltyFactor(float factor)
+{
+  for (auto& nb : nbVec_) {
+    nb->updateDensityPenaltyFromRatio(factor);
+  }
+}
+
+void NesterovPlace::guardIncrementalDensityPenalty(float& current_factor,
+                                                   float& best_overflow,
+                                                   int& retries)
+{
+  // React on the very first regression (a guard-parameter sweep found no
+  // patience delay to be best) by escalating the density penalty in place.
+  constexpr float kOverflowTolerance = 0.005f;
+  constexpr float kGrowthRatio = 2.0f;
+  constexpr int kMaxRetries = 10;
+
+  if (average_overflow_unscaled_ < best_overflow - kOverflowTolerance) {
+    best_overflow = average_overflow_unscaled_;
+    return;
+  }
+
+  if (average_overflow_unscaled_ <= best_overflow + kOverflowTolerance) {
+    return;
+  }
+
+  if (retries >= kMaxRetries) {
+    return;
+  }
+
+  ++retries;
+  current_factor *= kGrowthRatio;
+  applyDensityPenaltyFactor(current_factor);
+  log_->info(GPL,
+             193,
+             "Incremental density-penalty guard: overflow regressed past "
+             "{:.3f}; escalating the penalty factor to {:g} in place "
+             "(retry {}).",
+             best_overflow,
+             current_factor,
+             retries);
 }
 
 bool NesterovPlace::isDiverged(float& diverge_snapshot_WlCoefX,
@@ -699,8 +779,7 @@ void NesterovPlace::routabilitySnapshot(
           fmt::format("Iter {} |R: {} |T: {} save snapshot",
                       iter,
                       routability_driven_revert_count,
-                      timing_driven_count),
-          /* select_buffers = */ false);
+                      timing_driven_count));
     }
   }
 }
@@ -715,9 +794,22 @@ void NesterovPlace::runRoutability(int iter,
                                    float& curA)
 {
   // check routability using RUDY or GR
+  //
+  // The overflow gate alone says the design is spread; it does not say the
+  // cells have stopped moving, and those come apart when the penalty schedule
+  // changes pace. Measured on one design at the same overflow of 0.30: cells
+  // moving 2.02 bins per iteration read a congestion of 1.6447, and cells
+  // moving 6.44 bins per iteration - the same overflow, a faster schedule -
+  // read 2.3458. Inflation sized from the second reading is aimed at a
+  // placement that no longer exists by the time it lands. Wait for the motion
+  // to come off its peak as well.
+  //
+  // This can only ever delay the trigger, so a design already settled at its
+  // overflow gate is unaffected.
   if (npVars_.routability_driven_mode && is_routability_need_
-      && average_overflow_unscaled_ <= npVars_.routability_end_overflow) {
-    nbVec_[0]->setTrueReprintIterHeader();
+      && average_overflow_unscaled_ <= npVars_.routability_end_overflow
+      && isPlacementSettled()) {
+    getTopLevelNB()->setTrueReprintIterHeader();
     ++routability_driven_revert_count;
 
     if (graphics_ && graphics_->enabled() && npVars_.debug_generate_images) {
@@ -732,14 +824,12 @@ void NesterovPlace::runRoutability(int iter,
                       routability_driven_dir,
                       iter),
           label,
-          /* select_buffers = */ false,
           "Heat Maps/Placement Density");
 
       graphics_->saveLabeledImage(
           fmt::format(
               "{}/rudy_routability_{:05d}.png", routability_driven_dir, iter),
           label,
-          /* select_buffers = */ false,
           "Heat Maps/Estimated Congestion (RUDY)");
 
       odb::Rect region;
@@ -770,12 +860,24 @@ void NesterovPlace::runRoutability(int iter,
       graphics_->deleteLabel(label_name);
     }
 
+    // GRT and RUDY read the IO pins from the db
+    getTopLevelNB()->updateDbIoPins();
+
     // recover the densityPenalty values
     // if further routability-driven is needed
     std::pair<bool, bool> result
         = rb_->routability(routability_driven_revert_count);
     is_routability_need_ = result.first;
     bool isRevertInitNeeded = result.second;
+
+    // Every routability pass inflates cells, so the design placed after this
+    // one is not the design min_hpwl_ was measured on. Held across the change,
+    // the old minimum is unbeatable - there is more cell area to place now -
+    // and is_min_hpwl_ never comes true again, so no divergence snapshot is
+    // ever taken and a later divergence has nothing to fall back on but
+    // GPL-0307. Start the search for a minimum over on the new design.
+    min_hpwl_ = std::numeric_limits<int64_t>::max();
+    is_min_hpwl_ = false;
 
     if (graphics_ && graphics_->enabled()) {
       graphics_->addRoutabilityIter(iter, isRevertInitNeeded);
@@ -827,6 +929,18 @@ void NesterovPlace::runRoutability(int iter,
   }
 }
 
+// Every region has to have settled: routability acts on one congestion map
+// covering all of them.
+bool NesterovPlace::isPlacementSettled() const
+{
+  for (const auto& nb : nbVec_) {
+    if (!nb->isSettled()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool NesterovPlace::isConverged(int gpl_iter_count,
                                 int routability_gpl_iter_count)
 {
@@ -840,10 +954,19 @@ bool NesterovPlace::isConverged(int gpl_iter_count,
   if (num_region_converge == nbVec_.size()) {
     if (graphics_ && graphics_->enabled() && npVars_.debug_generate_images) {
       graphics_->gifEnd(placement_gif_key_);
+      placement_gif_key_ = -1;
     }
     return true;
   }
   return false;
+}
+
+NesterovBase* NesterovPlace::getTopLevelNB() const
+{
+  if (nbVec_.empty()) {
+    log_->error(GPL, 103, "Top-level NesterovBase is not initialized.");
+  }
+  return nbVec_[0].get();
 }
 
 std::string NesterovPlace::getReportsDir() const
@@ -955,8 +1078,7 @@ void NesterovPlace::reportResults(int nesterov_iter,
       graphics_->saveLabeledImage(
           fmt::format(
               "{}/final_nesterov_{:05d}.png", getReportsDir(), nesterov_iter),
-          label,
-          /* select_buffers = */ false);
+          label);
     }
   }
 
@@ -973,6 +1095,7 @@ void NesterovPlace::reportResults(int nesterov_iter,
                1011,
                "Original area (um^2): {:.2f}",
                block->dbuAreaToMicrons(original_area));
+    log_->metric("gpl__area__original", block->dbuAreaToMicrons(original_area));
   }
 
   if (npVars_.routability_driven_mode) {
@@ -984,6 +1107,9 @@ void NesterovPlace::reportResults(int nesterov_iter,
                "Total routability artificial inflation: {:.2f} ({:+.2f}%)",
                block->dbuAreaToMicrons(routability_inflation_area),
                routability_diff);
+    log_->metric("gpl__area__routability_inflation",
+                 block->dbuAreaToMicrons(routability_inflation_area));
+    log_->metric("gpl__area__routability_inflation__percent", routability_diff);
   }
 
   if (npVars_.timingDrivenMode) {
@@ -993,6 +1119,9 @@ void NesterovPlace::reportResults(int nesterov_iter,
                "Total timing-driven delta area: {:.2f} ({:+.2f}%)",
                block->dbuAreaToMicrons(td_accumulated_delta_area),
                td_diff);
+    log_->metric("gpl__area__timing_delta",
+                 block->dbuAreaToMicrons(td_accumulated_delta_area));
+    log_->metric("gpl__area__timing_delta__percent", td_diff);
   }
 
   int64_t new_area = 0;
@@ -1006,12 +1135,18 @@ void NesterovPlace::reportResults(int nesterov_iter,
              "Final placement area: {:.2f} ({:+.2f}%)",
              block->dbuAreaToMicrons(new_area),
              placement_diff);
+  log_->metric("gpl__area__final", block->dbuAreaToMicrons(new_area));
+  log_->metric("gpl__area__final__percent", placement_diff);
 }
 
 int NesterovPlace::doNesterovPlace(int start_iter)
 {
   // if replace diverged in init() function, Nesterov must be skipped.
   if (num_region_diverged_ > 0) {
+    if (allow_divergence_recovery_) {
+      log_->warn(GPL, divergeCode_, divergeMsg_);
+      return start_iter;
+    }
     log_->error(GPL, divergeCode_, divergeMsg_);
   }
 
@@ -1029,9 +1164,28 @@ int NesterovPlace::doNesterovPlace(int start_iter)
   // backTracking variable.
   float curA = 1.0;
 
+  // density penalty guard info
+  bool penalty_guard_active = incremental_penalty_guard_requested_
+                              && !npVars_.routability_driven_mode;
+  incremental_penalty_guard_requested_ = false;
+  float penalty_guard_factor = 1;
+  float penalty_guard_best_overflow = average_overflow_unscaled_;
+  int penalty_guard_retries = 0;
+
+  if (penalty_guard_active) {
+    applyDensityPenaltyFactor(penalty_guard_factor);
+    log_->info(GPL,
+               191,
+               "Incremental density-penalty guard enabled: penalty factor "
+               "{:g}, starting overflow {:.3f}.",
+               penalty_guard_factor,
+               penalty_guard_best_overflow);
+  }
+
   int routability_driven_revert_count = 0;
   int routability_gpl_iter_count_ = 0;
   int timing_driven_count = 0;
+  int virtual_cts_count = 0;
   bool final_routability_image_saved = false;
   int64_t original_area = 0;
   int64_t td_accumulated_delta_area = 0;
@@ -1045,6 +1199,7 @@ int NesterovPlace::doNesterovPlace(int start_iter)
     nb->setIter(start_iter);
     nb->setMaxPhiCoefChanged(false);
     nb->resetMinSumOverflow();
+    nb->resetConverged();
     original_area += nb->getNesterovInstsArea();
   }
 
@@ -1054,14 +1209,22 @@ int NesterovPlace::doNesterovPlace(int start_iter)
       = reports_dir + "/gpl_routability_driven";
 
   cleanReportsDirs(timing_driven_dir, routability_driven_dir);
+  if (graphics_ && graphics_->enabled() && npVars_.debug
+      && npVars_.debug_generate_images) {
+    if (placement_gif_key_ != -1) {
+      graphics_->gifEnd(placement_gif_key_);
+    }
+    const std::string gif_name
+        = (start_iter == 0) ? "placement.gif" : "placement_stage2.gif";
+    placement_gif_key_
+        = graphics_->gifStart(fmt::format("{}/{}", reports_dir, gif_name));
+  }
   if (graphics_ && graphics_->enabled() && npVars_.debug_generate_images) {
     updateDb();
     std::string label = fmt::format("init_nesterov");
 
     graphics_->saveLabeledImage(
-        fmt::format("{}/init_nesterov.png", getReportsDir()),
-        label,
-        /* select_buffers = */ false);
+        fmt::format("{}/init_nesterov.png", getReportsDir()), label);
   }
 
   // Core Nesterov Loop
@@ -1089,6 +1252,12 @@ int NesterovPlace::doNesterovPlace(int start_iter)
 
     updateNextIter(nesterov_iter);
 
+    if (penalty_guard_active) {
+      guardIncrementalDensityPenalty(penalty_guard_factor,
+                                     penalty_guard_best_overflow,
+                                     penalty_guard_retries);
+    }
+
     updateIterGraphics(nesterov_iter,
                        reports_dir,
                        routability_driven_dir,
@@ -1109,7 +1278,8 @@ int NesterovPlace::doNesterovPlace(int start_iter)
                     routability_driven_revert_count,
                     timing_driven_count,
                     td_accumulated_delta_area,
-                    is_routability_gpl_iter);
+                    is_routability_gpl_iter,
+                    virtual_cts_count);
 
     if (isDiverged(diverge_snapshot_WlCoefX,
                    diverge_snapshot_WlCoefY,
@@ -1141,13 +1311,28 @@ int NesterovPlace::doNesterovPlace(int start_iter)
     }
   }
 
+  // Remove virtual clock tree insertions before final timing analysis.
+  if (cb_) {
+    cb_->removeVirtualCts();
+  }
+
+  // The GPU HPWL backend keeps per-net boxes device-resident during the
+  // loop (no host reader exists there — see hpwlBackend.h). Materialize
+  // them once now so any post-placement host consumer sees the final
+  // boxes. No-op on the CPU backend.
+  nbc_->mirrorNetBoxesToHost();
+
   reportResults(nesterov_iter, original_area, td_accumulated_delta_area);
 
   // In all case, including divergence, the db should be updated.
   updateDb();
 
   if (num_region_diverged_ > 0) {
-    log_->error(GPL, divergeCode_, divergeMsg_);
+    if (allow_divergence_recovery_) {
+      log_->warn(GPL, divergeCode_, divergeMsg_);
+    } else {
+      log_->error(GPL, divergeCode_, divergeMsg_);
+    }
   }
 
   if (graphics_ && graphics_->enabled() && npVars_.debug) {
@@ -1163,8 +1348,7 @@ int NesterovPlace::doNesterovPlace(int start_iter)
       graphics_->saveLabeledImage(fmt::format("{}/2_final_placement_{:05d}.png",
                                               routability_driven_dir,
                                               nesterov_iter),
-                                  label,
-                                  /* select_buffers = */ false);
+                                  label);
     }
   }
 
@@ -1224,7 +1408,15 @@ void NesterovPlace::updateNextIter(int iter)
 
 void NesterovPlace::updateDb()
 {
+  // The GPU device-resident density pipeline leaves host GCell coords
+  // stale during the hot loop; refresh them before writing to the DB.
+  for (auto& nb : nbVec_) {
+    nb->pullCoordsFromDevice();
+  }
   nbc_->updateDbGCells();
+  for (auto& nb : nbVec_) {
+    nb->updateDbIoPins();
+  }
 }
 
 // divergence detection on
@@ -1251,18 +1443,67 @@ nesterovDbCbk::nesterovDbCbk(NesterovPlace* nesterov_place)
 void NesterovPlace::createCbkGCell(odb::dbInst* db_inst)
 {
   auto gcell_index = nbc_->createCbkGCell(db_inst);
-  // Always create gcell on top-level
-  nbVec_[0]->createCbkGCell(db_inst, gcell_index);
-  // TODO: create new gcell in its proper region
-  // for (auto& nesterov : nbVec_) {
-  //   nesterov->createCbkGCell(db_inst, gcell_index);
-  // }
+
+  odb::dbRegion* region = db_inst->getRegion();
+  if (!region) {
+    getTopLevelNB()->createCbkGCell(db_inst, gcell_index);
+    return;
+  }
+
+  for (auto group : region->getGroups()) {
+    bool found_nb = false;
+    for (auto& nb : nbVec_) {
+      if (group == nb->getGroup()) {
+        nb->createCbkGCell(db_inst, gcell_index);
+        found_nb = true;
+      }
+    }
+    if (!found_nb) {
+      log_->warn(
+          GPL,
+          85,
+          "Unable to find NesterovBase for group ({}) to insert instance ({}).",
+          group->getName(),
+          db_inst->getName());
+    }
+  }
 }
 
 void NesterovPlace::destroyCbkGCell(odb::dbInst* db_inst)
 {
+  if (db_inst == nullptr) {
+    log_->warn(GPL, 328, "Trying to destroy odb::dbInst* nullptr");
+    return;
+  }
+
+  bool destroyed = false;
   for (auto& nesterov : nbVec_) {
-    nesterov->destroyCbkGCell(db_inst);
+    std::optional<std::pair<odb::dbInst*, size_t>> replaced
+        = nesterov->destroyCbkGCell(db_inst);
+    if (!replaced) {
+      continue;
+    }
+    destroyed = true;
+    if (replaced->first) {
+      bool updated = false;
+      for (auto& nesterov : nbVec_) {
+        updated |= nesterov->updateHandle(replaced->first, replaced->second);
+      }
+      if (!updated) {
+        log_->error(GPL,
+                    329,
+                    "NesterovPlace destroyCbkGCell failed to update db_inst {}",
+                    replaced->first->getName());
+      }
+    }
+  }
+  if (!destroyed) {
+    debugPrint(log_,
+               GPL,
+               "callbacks",
+               1,
+               "warn db_inst ({}) not destroyed inside GPL",
+               db_inst->getName());
   }
 }
 
@@ -1319,11 +1560,6 @@ void nesterovDbCbk::inDbPostMoveInst(odb::dbInst* db_inst)
 void nesterovDbCbk::inDbInstCreate(odb::dbInst* db_inst)
 {
   nesterov_place_->createCbkGCell(db_inst);
-}
-
-// TODO: use the region to create new gcell.
-void nesterovDbCbk::inDbInstCreate(odb::dbInst* db_inst, odb::dbRegion* region)
-{
 }
 
 void nesterovDbCbk::inDbInstDestroy(odb::dbInst* db_inst)

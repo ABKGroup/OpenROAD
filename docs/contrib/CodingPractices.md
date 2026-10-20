@@ -514,7 +514,15 @@ All of the following are to be avoided:
 
 ## CMake
 
-### Practice #35
+:::{note}
+CMake is deprecated and will be removed on Nov. 1, 2026. Practices #36 to #38
+apply to CMake files only and will be deleted at the removal. New code is
+registered in Bazel `BUILD` files only.
+:::
+
+### Practice #36
+
+(Deprecated: CMake is removed on Nov. 1, 2026.)
 
 Don't change compile flags in `cmake` files. These are set at the top
 level and should not be overridden.
@@ -525,7 +533,9 @@ set(CMAKE_CXX_FLAGS_DEBUG "-g -ggdb")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 ```
 
-### Practice #36
+### Practice #37
+
+(Deprecated: CMake is removed on Nov. 1, 2026.)
 
 Don't put /'s in CMake directory names. CMake knows they are directories.
 
@@ -533,9 +543,11 @@ Don't put /'s in CMake directory names. CMake knows they are directories.
 target_include_directories( ABKCommon PUBLIC ${ABKCOMMON_HOME} src/ )
 ```
 
-### Practice #37
+### Practice #38
 
-Don't use `glob`. Explictly list the files in a group.
+(Deprecated: CMake is removed on Nov. 1, 2026.)
+
+Don't use `glob`. Explicitly list the files in a group.
 
 ``` cmake
 # Instead of

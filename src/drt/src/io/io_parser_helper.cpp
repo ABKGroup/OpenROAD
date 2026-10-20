@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -13,12 +14,11 @@
 #include "boost/polygon/polygon.hpp"
 #include "db/obj/frAccess.h"
 #include "db/obj/frFig.h"
-#include "db/obj/frRPin.h"
 #include "db/obj/frVia.h"
 #include "db/tech/frConstraint.h"
+#include "drt-global.h"
 #include "frBaseTypes.h"
 #include "frProfileTask.h"
-#include "global.h"
 #include "io/io.h"
 #include "odb/dbTransform.h"
 #include "odb/dbTypes.h"
@@ -679,9 +679,7 @@ void io::Parser::convertLef58MinCutConstraints()
     }
     for (auto con : layer->getLef58MinimumcutConstraints()) {
       auto dbRule = con->getODBRule();
-      std::unique_ptr<frConstraint> uCon
-          = std::make_unique<frMinimumcutConstraint>();
-      auto rptr = static_cast<frMinimumcutConstraint*>(uCon.get());
+      int num_cuts = dbRule->getNumCuts();
       if (dbRule->isPerCutClass()) {
         const frViaDef* viaDefBelow = nullptr;
         if (lNum > bottomLayerNum) {
@@ -692,19 +690,17 @@ void io::Parser::convertLef58MinCutConstraints()
           viaDefAbove = getTech()->getLayer(lNum + 1)->getDefaultViaDef();
         }
         bool found = false;
-        rptr->setNumCuts(dbRule->getNumCuts());
         for (const auto& [cutclass, numcuts] : dbRule->getCutClassCutsMap()) {
           if (viaDefBelow && !dbRule->isFromAbove()
               && viaDefBelow->getCutClass()->getName() == cutclass) {
             found = true;
-            rptr->setNumCuts(numcuts);
+            num_cuts = numcuts;
             break;
           }
           if (viaDefAbove && !dbRule->isFromBelow()
               && viaDefAbove->getCutClass()->getName() == cutclass) {
             found = true;
-
-            rptr->setNumCuts(numcuts);
+            num_cuts = numcuts;
             break;
           }
         }
@@ -712,7 +708,15 @@ void io::Parser::convertLef58MinCutConstraints()
           continue;
         }
       }
+      // Every via has at least one cut, so a single-cut rule can't be violated.
+      if (num_cuts <= 1) {
+        continue;
+      }
 
+      std::unique_ptr<frConstraint> uCon
+          = std::make_unique<frMinimumcutConstraint>();
+      auto rptr = static_cast<frMinimumcutConstraint*>(uCon.get());
+      rptr->setNumCuts(num_cuts);
       if (dbRule->isLengthValid()) {
         router_cfg_->MTSAFEDIST
             = std::max(router_cfg_->MTSAFEDIST, dbRule->getLengthWithinDist());
@@ -947,81 +951,4 @@ void io::Parser::postProcess()
   getDesign()->getRegionQuery()->initDRObj();  // second init from FlexDR.cpp
 }
 
-// instantiate RPin and region query for RPin
-void io::Parser::initRPin()
-{
-  if (router_cfg_->VERBOSE > 0) {
-    logger_->info(DRT, 185, "Post process initialize RPin region query.");
-  }
-  initRPin_rpin();
-  initRPin_rq();
-}
-
-void io::Parser::initRPin_rpin()
-{
-  for (auto& net : getBlock()->getNets()) {
-    if (net->isConnectedByAbutment()) {
-      continue;
-    }
-    // instTerm
-    for (auto& instTerm : net->getInstTerms()) {
-      auto inst = instTerm->getInst();
-      int pinIdx = 0;
-      auto trueTerm = instTerm->getTerm();
-      for (auto& pin : trueTerm->getPins()) {
-        auto rpin = std::make_unique<frRPin>();
-        rpin->setFrTerm(instTerm);
-        rpin->addToNet(net.get());
-        frAccessPoint* prefAp = (instTerm->getAccessPoints())[pinIdx];
-
-        // MACRO does not go through PA
-        if (prefAp == nullptr) {
-          odb::dbMasterType masterType = inst->getMaster()->getMasterType();
-          if (masterType.isBlock() || masterType.isPad()
-              || masterType == odb::dbMasterType::RING) {
-            prefAp = (pin->getPinAccess(inst->getPinAccessIdx())
-                          ->getAccessPoints())[0]
-                         .get();
-          } else {
-            continue;
-          }
-        }
-
-        if (prefAp == nullptr) {
-          logger_->warn(DRT,
-                        246,
-                        "{}/{} from {} has nullptr as prefAP.",
-                        instTerm->getInst()->getName(),
-                        trueTerm->getName(),
-                        net->getName());
-        }
-
-        rpin->setAccessPoint(prefAp);
-
-        net->addRPin(rpin);
-
-        pinIdx++;
-      }
-    }
-    // term
-    for (auto& term : net->getBTerms()) {
-      auto trueTerm = term;
-      for (auto& pin : trueTerm->getPins()) {
-        auto rpin = std::make_unique<frRPin>();
-        rpin->setFrTerm(term);
-        rpin->addToNet(net.get());
-        frAccessPoint* prefAp
-            = (pin->getPinAccess(0)->getAccessPoints())[0].get();
-        rpin->setAccessPoint(prefAp);
-
-        net->addRPin(rpin);
-      }
-    }
-  }
-}
-
-void io::Parser::initRPin_rq()
-{
-  getDesign()->getRegionQuery()->initRPin();
-}
 }  // namespace drt

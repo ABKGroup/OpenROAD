@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2022-2025, The OpenROAD Authors
 
+# Test Parity Note: All tests from CMakeLists.txt are included in this BUILD file.
+# No tests are intentionally excluded. See .kiro/specs/bazel-cmake-test-parity/intentional_exclusions.md
+
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
-load("//test:regression.bzl", "regression_test")
+load("@rules_python//python:defs.bzl", "py_test")
+load("//test:regression.bzl", "doc_check_test", "regression_test")
 
 package(features = ["layering_check"])
 
@@ -20,19 +24,14 @@ COMPULSORY_TESTS = [
     "scan_architect_clock_mix_sky130",
     "scan_architect_no_mix_sky130",
     "scan_architect_register_bank_no_clock_mix_sky130",
+    "scan_replace_dont_use_sky130",
     "scandef_core_sky130",
     "scandef_sky130",
     "sub_modules_sky130",
     "use_existing_scan_chains_sky130",
 ]
 
-# Disabled in CMakeLists.txt
-MANUAL_TESTS = [
-    "dft_man_tcl_check",
-    "dft_readme_msgs_check",
-]
-
-ALL_TESTS = COMPULSORY_TESTS + MANUAL_TESTS
+ALL_TESTS = COMPULSORY_TESTS
 
 filegroup(
     name = "regression_resources",
@@ -70,6 +69,9 @@ filegroup(
             "scan_architect_register_bank_no_clock_mix_sky130": [
                 "register_bank_top.v",
             ],
+            "scan_replace_dont_use_sky130": [
+                "one_cell_sky130.def",
+            ],
             "scandef_core_sky130": [
                 "register_bank_cores.lef",
                 "scan_inserted_register_bank.v",
@@ -96,9 +98,20 @@ filegroup(
 cc_test(
     name = "dft_scan_architect_unittest",
     srcs = ["cpp/TestScanArchitect.cpp"],
-    features = ["-layering_check"],  # TODO: includes private headers
     deps = [
-        "//src/dft",
+        "//src/dft/src/architect",
+        "//src/dft/src/config",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "TestScanArchitect",
+    srcs = ["cpp/TestScanArchitect.cpp"],
+    deps = [
+        "//src/dft/src/architect",
+        "//src/dft/src/config",
         "@googletest//:gtest",
         "@googletest//:gtest_main",
     ],
@@ -111,13 +124,55 @@ cc_test(
         "cpp/ScanCellMock.hh",
         "cpp/TestScanArchitectHeuristic.cpp",
     ],
-    features = ["-layering_check"],  # TODO: includes private headers
     deps = [
-        "//src/dft",
+        "//src/dft/src/architect",
+        "//src/dft/src/cells",
+        "//src/dft/src/clock_domain",
+        "//src/dft/src/config",
         "//src/dft/src/utils",
-        "//src/odb",
+        "//src/odb/src/db",
         "//src/utl",
         "@googletest//:gtest",
         "@googletest//:gtest_main",
     ],
+)
+
+cc_test(
+    name = "TestScanArchitectHeuristic",
+    srcs = [
+        "cpp/ScanCellMock.cpp",
+        "cpp/ScanCellMock.hh",
+        "cpp/TestScanArchitectHeuristic.cpp",
+    ],
+    deps = [
+        "//src/dft/src/architect",
+        "//src/dft/src/cells",
+        "//src/dft/src/clock_domain",
+        "//src/dft/src/config",
+        "//src/dft/src/utils",
+        "//src/odb/src/db",
+        "//src/utl",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)
+
+py_test(
+    name = "dft_man_tcl_check",
+    srcs = ["dft_man_tcl_check.py"],
+    data = ["//src/dft:doc_files"],
+    tags = [
+        "doc_check",
+        "py",
+    ],
+    deps = ["//docs/src/scripts:extract_utils"],
+)
+
+doc_check_test(
+    name = "dft_readme_msgs_check",
+    data = [
+        "//src/dft:doc_files",
+        "//src/dft:messages_txt",
+    ],
+    visibility = ["//visibility:public"],
 )

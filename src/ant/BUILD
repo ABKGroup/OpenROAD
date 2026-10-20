@@ -2,9 +2,10 @@
 # Copyright (c) 2025, The OpenROAD Authors
 
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
-load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
+load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
 load("//bazel:tcl_encode_or.bzl", "tcl_encode")
 load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+load("//test:regression.bzl", "messages_txt")
 
 package(
     default_visibility = ["//:__subpackages__"],
@@ -16,6 +17,10 @@ cc_library(
     srcs = [
         "src/AntennaChecker.cc",
         "src/AntennaCheckerImpl.hh",
+        "src/AntennaReport.cc",
+        "src/AntennaReport.hh",
+        "src/AntennaRules.cc",
+        "src/AntennaRules.hh",
         "src/PinType.hh",
         "src/Polygon.cc",
         "src/Polygon.hh",
@@ -32,13 +37,28 @@ cc_library(
         "include",
     ],
     deps = [
-        "//src/odb",
+        "//src/odb/src/db",
         "//src/utl",
-        "@abseil-cpp//absl/synchronization",
         "@boost.container_hash",
         "@boost.graph",
         "@boost.polygon",
         "@openmp",
+    ],
+)
+
+# The private rule and report helpers, for the unit tests in test/cpp.
+cc_library(
+    name = "ant_internal",
+    testonly = True,
+    hdrs = [
+        "src/AntennaReport.hh",
+        "src/AntennaRules.hh",
+    ],
+    strip_include_prefix = "src",
+    visibility = ["//src/ant/test:__pkg__"],
+    deps = [
+        ":ant",
+        "//src/odb/src/db",
     ],
 )
 
@@ -56,7 +76,6 @@ cc_library(
     deps = [
         ":ant",
         "//:ord",
-        "//src/odb",
         "//src/utl",
         "@boost.stacktrace",
         "@tcl_lang//:tcl",
@@ -102,4 +121,25 @@ python_wrap_cc(
     deps = [
         "//src/odb:swig-py",
     ],
+)
+
+filegroup(
+    name = "doc_files",
+    srcs = [
+        "README.md",
+        "src/AntennaChecker.tcl",
+    ],
+    visibility = ["//src/ant/test:__pkg__"],
+)
+
+messages_txt(
+    visibility = [
+        "//docs:__pkg__",
+        "//src/ant/test:__pkg__",
+    ],
+)
+
+python_wrap_library(
+    name = "py_wrap",
+    deps = [":ant"],
 )

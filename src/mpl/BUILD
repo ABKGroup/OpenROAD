@@ -4,6 +4,7 @@
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//bazel:tcl_encode_or.bzl", "tcl_encode")
 load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+load("//test:regression.bzl", "messages_txt")
 
 package(
     default_visibility = ["//:__subpackages__"],
@@ -11,9 +12,48 @@ package(
 )
 
 cc_library(
-    name = "mpl",
+    name = "snapper",
     srcs = [
-        "src/MplObserver.h",
+        "src/snapper.cpp",
+    ],
+    hdrs = [
+        "src/snapper.h",
+    ],
+    includes = [
+        "src",
+    ],
+    deps = [
+        "//src/odb/src/db",
+        "//src/utl",
+    ],
+)
+
+cc_library(
+    name = "pusher",
+    srcs = [
+        "src/object.cpp",
+        "src/pusher.cpp",
+        "src/shapes.cpp",
+    ],
+    hdrs = [
+        "src/mpl-util.h",
+        "src/object.h",
+        "src/pusher.h",
+        "src/shapes.h",
+    ],
+    includes = [
+        "src",
+    ],
+    deps = [
+        "//src/odb/src/db",
+        "//src/utl",
+        "@boost.random",
+    ],
+)
+
+cc_library(
+    name = "mpl_impl",
+    srcs = [
         "src/SACoreHardMacro.cpp",
         "src/SACoreHardMacro.h",
         "src/SACoreSoftMacro.cpp",
@@ -21,26 +61,27 @@ cc_library(
         "src/SimulatedAnnealingCore.cpp",
         "src/SimulatedAnnealingCore.h",
         "src/clusterEngine.cpp",
-        "src/clusterEngine.h",
         "src/hier_rtlmp.cpp",
         "src/hier_rtlmp.h",
-        "src/mpl-util.h",
-        "src/object.cpp",
-        "src/object.h",
         "src/rtl_mp.cpp",
-        "src/shapes.cpp",
-        "src/shapes.h",
     ],
     hdrs = [
         "include/mpl/rtl_mp.h",
+        "src/MplObserver.h",
+        "src/clusterEngine.h",
     ],
     includes = [
         "include",
+        "src",
+    ],
+    visibility = [
+        "//src/mpl:__subpackages__",
     ],
     deps = [
-        "//src/dbSta",
+        ":pusher",
+        ":snapper",
         "//src/dbSta:dbNetwork",
-        "//src/odb",
+        "//src/odb/src/db",
         "//src/par",
         "//src/sta:opensta_lib",
         "//src/utl",
@@ -50,35 +91,43 @@ cc_library(
 )
 
 cc_library(
+    name = "mpl",
+    hdrs = [
+        "include/mpl/rtl_mp.h",
+    ],
+    includes = [
+        "include",
+    ],
+    deps = [
+        ":mpl_impl",
+        "//src/odb/src/db",
+        "//src/utl",
+    ],
+)
+
+cc_library(
     name = "ui",
     srcs = [
-        "include/mpl/rtl_mp.h",
         "src/MakeMacroPlacer.cpp",
-        "src/MplObserver.h",
-        "src/clusterEngine.h",
         "src/graphics.cpp",
         "src/graphics.h",
-        "src/mpl-util.h",
-        "src/object.h",
-        "src/shapes.h",
         ":swig",
         ":tcl",
     ],
     hdrs = [
         "include/mpl/MakeMacroPlacer.h",
     ],
-    copts = [
-        "-Isrc/mpl/src",
-    ],
     includes = [
         "include",
+        "src",
     ],
     deps = [
-        ":mpl",
+        ":mpl_impl",
+        ":pusher",
         "//:ord",
-        "//src/gui",
-        "//src/odb",
+        "//src/odb/src/db",
         "//src/utl",
+        "//src/web:core",
         "@boost.stacktrace",
         "@tcl_lang//:tcl",
     ],
@@ -107,5 +156,21 @@ tcl_wrap_cc(
     ],
     deps = [
         "//src/odb:swig",
+    ],
+)
+
+filegroup(
+    name = "doc_files",
+    srcs = [
+        "README.md",
+        "src/mpl.tcl",
+    ],
+    visibility = ["//src/mpl/test:__pkg__"],
+)
+
+messages_txt(
+    visibility = [
+        "//docs:__pkg__",
+        "//src/mpl/test:__pkg__",
     ],
 )

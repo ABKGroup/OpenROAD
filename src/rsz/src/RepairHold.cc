@@ -5,11 +5,12 @@
 
 #include <algorithm>
 #include <limits>
+#include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
-#include "BufferMove.hh"
-#include "RepairDesign.hh"
+#include "PathGroupFilter.hh"
 #include "db_sta/dbNetwork.hh"
 #include "db_sta/dbSta.hh"
 #include "est/EstimateParasitics.h"
@@ -23,7 +24,6 @@
 #include "sta/Graph.hh"
 #include "sta/GraphClass.hh"
 #include "sta/GraphDelayCalc.hh"
-#include "sta/InputDrive.hh"
 #include "sta/Liberty.hh"
 #include "sta/LibertyClass.hh"
 #include "sta/MinMax.hh"
@@ -43,9 +43,6 @@
 
 namespace rsz {
 
-using namespace sta;  // NOLINT
-
-using std::max;
 using std::min;
 using std::string;
 using std::vector;
@@ -79,15 +76,29 @@ bool RepairHold::repairHold(
   init();
   sta_->checkSlewsPreamble();
   sta_->checkCapacitancesPreamble(sta_->scenes());
-  LibertyCell* buffer_cell = findHoldBuffer();
+  sta::LibertyCell* buffer_cell = findHoldBuffer();
 
   sta_->findRequireds();
-  VertexSet& ends = sta_->search()->endpoints();
-  VertexSeq ends1;
-  for (Vertex* end : ends) {
-    ends1.push_back(end);
+  sta::VertexSet& ends = sta_->search()->endpoints();
+  const PathGroupFilter path_group_filter(resizer_);
+  sta::VertexSeq ends1;
+  if (path_group_filter.enabled()) {
+    // Hold paths are min delay paths, so ask the group against min_. One
+    // query returns every endpoint whose own hold slack in the group needs
+    // repairing; merely hosting an in-group path would let nearly every
+    // register through.
+    for (const auto& [pin, slack] :
+         path_group_filter.groupEndpointSlacks(min_, hold_margin)) {
+      // slack_max is inclusive; the margin test here is strict.
+      sta::Vertex* vertex = graph_->pinLoadVertex(pin);
+      if (vertex != nullptr && sta::fuzzyLess(slack, hold_margin)) {
+        ends1.push_back(vertex);
+      }
+    }
+  } else {
+    ends1.assign(ends.begin(), ends.end());
   }
-  sort(ends1, sta::VertexIdLess(graph_));
+  sta::sort(ends1, sta::VertexIdLess(graph_));
 
   int max_buffer_count = max_buffer_percent * network_->instanceCount();
   // Prevent it from being too small on trivial designs
@@ -120,7 +131,7 @@ void RepairHold::repairHold(const sta::Pin* end_pin,
   init();
   sta_->checkSlewsPreamble();
   sta_->checkCapacitancesPreamble(sta_->scenes());
-  LibertyCell* buffer_cell = findHoldBuffer();
+  sta::LibertyCell* buffer_cell = findHoldBuffer();
 
   sta::Vertex* end = graph_->pinLoadVertex(end_pin);
   sta::VertexSeq ends;
@@ -328,8 +339,7 @@ bool RepairHold::addMatchingBuffers(const sta::LibertyCellSeq& buffer_list,
 
     bool footprint_matches = true;
     if (match_footprint) {
-      const char* footprint_cstr = buffer->footprint();
-      std::string footprint = footprint_cstr ? footprint_cstr : "";
+      const std::string& footprint = buffer->footprint();
       footprint_matches = !lib_has_footprints || isDelayCell(footprint);
     }
 
@@ -367,16 +377,16 @@ void RepairHold::bufferHoldDelays(sta::LibertyCell* buffer,
   for (int rf_index : sta::RiseFall::rangeIndex()) {
     delays[rf_index] = sta::MinMax::min()->initValue();
   }
-  for (Scene* corner : sta_->scenes()) {
-    const LibertyPort* corner_port
-        = static_cast<const LibertyPort*>(input)->scenePort(
+  for (sta::Scene* corner : sta_->scenes()) {
+    const sta::LibertyPort* corner_port
+        = static_cast<const sta::LibertyPort*>(input)->scenePort(
             corner->libertyIndex(max_));
 
     const float load_cap = corner_port->capacitance();
-    ArcDelay gate_delays[RiseFall::index_count];
-    Slew slews[RiseFall::index_count];
+    sta::ArcDelay gate_delays[sta::RiseFall::index_count];
+    sta::Slew slews[sta::RiseFall::index_count];
     resizer_->gateDelays(output, load_cap, corner, max_, gate_delays, slews);
-    for (int rf_index : RiseFall::rangeIndex()) {
+    for (int rf_index : sta::RiseFall::rangeIndex()) {
       delays[rf_index] = min(delays[rf_index], gate_delays[rf_index]);
     }
   }
@@ -398,6 +408,7 @@ bool RepairHold::repairHold(sta::VertexSeq& ends,
   sta::Slack worst_slack;
   findHoldViolations(ends, hold_margin, worst_slack, hold_failures);
   inserted_buffer_count_ = 0;
+  resize_count_ = 0;
   if (!hold_failures.empty()) {
     logger_->info(RSZ,
                   46,
@@ -418,8 +429,8 @@ bool RepairHold::repairHold(sta::VertexSeq& ends,
                  1,
                  "pass {} hold slack {} setup slack {}",
                  pass,
-                 delayAsString(worst_slack, sta_, 3),
-                 delayAsString(sta_->worstSlack(max_), sta_, 3));
+                 delayAsString(worst_slack, 3, sta_),
+                 delayAsString(sta_->worstSlack(max_), 3, sta_));
       int hold_buffer_count_before = inserted_buffer_count_;
       repairHoldPass(hold_failures,
                      buffer_cell,
@@ -440,17 +451,19 @@ bool RepairHold::repairHold(sta::VertexSeq& ends,
       progress = inserted_buffer_count_ > hold_buffer_count_before;
     }
     printProgress(pass, true, true);
-    if (hold_margin == 0.0 && fuzzyLess(worst_slack, 0.0)) {
+    if (hold_margin == 0.0 && sta::fuzzyLess(worst_slack, 0.0)) {
       logger_->warn(RSZ, 66, "Unable to repair all hold violations.");
-    } else if (fuzzyLess(worst_slack, hold_margin)) {
+    } else if (sta::fuzzyLess(worst_slack, hold_margin)) {
       logger_->warn(RSZ, 64, "Unable to repair all hold checks within margin.");
     }
 
+    if (resize_count_ > 0) {
+      logger_->info(RSZ, 132, "Resized {} instances.", resize_count_);
+    }
     if (inserted_buffer_count_ > 0) {
       repaired = true;
       logger_->info(
           RSZ, 32, "Inserted {} hold buffers.", inserted_buffer_count_);
-      resizer_->level_drvr_vertices_valid_ = false;
     }
     if (inserted_buffer_count_ > max_buffer_count) {
       logger_->error(RSZ, 60, "Max buffer count reached.");
@@ -468,17 +481,28 @@ bool RepairHold::repairHold(sta::VertexSeq& ends,
   return repaired;
 }
 
+sta::Slack RepairHold::holdSlack(sta::Vertex* end) const
+{
+  if (resizer_->pathGroup().empty()) {
+    return sta_->slack(end, min_);
+  }
+  // A worse hold path of another group at the same endpoint is not this
+  // repair's to fix, and would keep the endpoint failing once its group
+  // path is met. An endpoint with no path in the group has none to fix.
+  return PathGroupFilter(resizer_).groupSlack(end, min_).value_or(sta::INF);
+}
+
 void RepairHold::findHoldViolations(sta::VertexSeq& ends,
                                     const double hold_margin,
                                     // Return values.
                                     sta::Slack& worst_slack,
                                     sta::VertexSeq& hold_violations)
 {
-  worst_slack = INF;
+  worst_slack = sta::INF;
   hold_violations.clear();
   debugPrint(logger_, RSZ, "repair_hold", 3, "Hold violations");
-  for (Vertex* end : ends) {
-    const Slack slack = sta_->slack(end, min_);
+  for (sta::Vertex* end : ends) {
+    const sta::Slack slack = holdSlack(end);
     if (!sta_->isClock(end->pin(), sta_->cmdMode()) && slack < hold_margin) {
       debugPrint(logger_,
                  RSZ,
@@ -504,15 +528,21 @@ void RepairHold::repairHoldPass(sta::VertexSeq& hold_failures,
                                 int& pass)
 {
   estimate_parasitics_->updateParasitics();
-  sort(hold_failures, [=, this](Vertex* end1, Vertex* end2) {
-    return sta_->slack(end1, min_) < sta_->slack(end2, min_);
+  // Under -path_group each slack is a path query, so read it once per
+  // endpoint rather than on every comparison.
+  std::unordered_map<sta::Vertex*, sta::Slack> end_slacks;
+  end_slacks.reserve(hold_failures.size());
+  for (sta::Vertex* end : hold_failures) {
+    end_slacks[end] = holdSlack(end);
+  }
+  sta::sort(hold_failures, [&](sta::Vertex* end1, sta::Vertex* end2) {
+    return end_slacks.at(end1) < end_slacks.at(end2);
   });
   for (sta::Vertex* end_vertex : hold_failures) {
     if (verbose) {
       printProgress(pass, false, false);
     }
 
-    estimate_parasitics_->updateParasitics();
     repairEndHold(end_vertex,
                   buffer_cell,
                   setup_margin,
@@ -528,9 +558,9 @@ void RepairHold::repairHoldPass(sta::VertexSeq& hold_failures,
 class RepairHoldPredicate : public sta::SearchPred1
 {
  public:
-  RepairHoldPredicate(StaState* sta) : sta::SearchPred1(sta) {}
+  RepairHoldPredicate(sta::StaState* sta) : sta::SearchPred1(sta) {}
 
-  bool searchThru(Edge* edge, const Mode* mode) const override
+  bool searchThru(sta::Edge* edge, const sta::Mode* mode) const override
   {
     const sta::TimingRole* role = edge->role();
     return sta::SearchPred1::searchThru(edge, mode)
@@ -538,15 +568,19 @@ class RepairHoldPredicate : public sta::SearchPred1
   }
 };
 
-void RepairHold::repairEndHold(Vertex* end_vertex,
-                               LibertyCell* buffer_cell,
+void RepairHold::repairEndHold(sta::Vertex* end_vertex,
+                               sta::LibertyCell* buffer_cell,
                                const double setup_margin,
                                const double hold_margin,
                                const bool allow_setup_violations)
 {
-  Path* end_path = sta_->vertexWorstSlackPath(end_vertex, min_);
-  Mode* mode = end_path->mode(sta_);
+  // The endpoint is here because the group's hold slack violates, which its
+  // worst hold path need not belong to. Repair the group's own path so the
+  // buffers land on what was asked for.
+  const PathGroupFilter path_group_filter(resizer_);
+  sta::Path* end_path = path_group_filter.findWorstSlackPath(end_vertex, min_);
   if (end_path) {
+    sta::Mode* mode = end_path->mode(sta_);
     debugPrint(logger_,
                RSZ,
                "repair_hold",
@@ -555,7 +589,13 @@ void RepairHold::repairEndHold(Vertex* end_vertex,
                end_vertex->name(network_),
                delayAsString(end_path->slack(sta_), sta_),
                delayAsString(sta_->slack(end_vertex, max_), sta_));
-    PathExpanded expanded(end_path, sta_);
+    // Under -path_group a load's own hold slack also counts other groups'
+    // paths, so it neither decides where a buffer goes nor how much delay
+    // it must add: only the group's path at this endpoint does, until it is
+    // met. Other failing loads still share the buffer, setup checked.
+    const bool group_only = path_group_filter.enabled();
+    sta::Slack group_hold_slack = end_path->slack(sta_);
+    sta::PathExpanded expanded(end_path, sta_);
     RepairHoldPredicate pred(sta_);
     const int path_length = expanded.size();
     if (path_length > 1) {
@@ -570,33 +610,43 @@ void RepairHold::repairEndHold(Vertex* end_vertex,
         sta::Vertex* path_vertex = path_vertices[i];
         sta::Pin* path_pin = path_vertex->pin();
 
+        if (group_only && !(group_hold_slack < hold_margin)) {
+          break;
+        }
         if (path_vertex->isDriver(network_)
             && resizer_->okToBufferNet(path_pin)) {
           sta::PinSeq load_pins;
           Slacks slacks;
           mergeInit(slacks);
-          float excluded_cap = 0.0;
           bool loads_have_out_port = false;
-          VertexOutEdgeIterator edge_iter(path_vertex, graph_);
+          sta::VertexOutEdgeIterator edge_iter(path_vertex, graph_);
           while (edge_iter.hasNext()) {
-            Edge* edge = edge_iter.next();
-            Vertex* fanout = edge->to(graph_);
+            sta::Edge* edge = edge_iter.next();
+            sta::Vertex* fanout = edge->to(graph_);
             if (pred.searchTo(fanout, mode) && pred.searchThru(edge, mode)) {
-              Slack fanout_hold_slack = sta_->slack(fanout, min_);
-              Pin* load_pin = fanout->pin();
+              sta::Slack fanout_hold_slack = sta_->slack(fanout, min_);
+              sta::Pin* load_pin = fanout->pin();
+              if (load_pin == nullptr) {
+                continue;
+              }
+              if (!network_->direction(load_pin)->isAnyInput()
+                  && !network_->isTopLevelPort(load_pin)) {
+                continue;
+              }
               if (fanout_hold_slack < hold_margin) {
                 load_pins.push_back(load_pin);
                 Slacks fanout_slacks;
                 sta_->slacks(fanout, fanout_slacks);
+                if (group_only) {
+                  // The buffer delays both transitions by what the group
+                  // needs; setup still answers for every path.
+                  fanout_slacks[rise_index_][min_index_] = group_hold_slack;
+                  fanout_slacks[fall_index_][min_index_] = group_hold_slack;
+                }
                 mergeInto(fanout_slacks, slacks);
                 if (network_->direction(load_pin)->isAnyOutput()
                     && network_->isTopLevelPort(load_pin)) {
                   loads_have_out_port = true;
-                }
-              } else {
-                sta::LibertyPort* load_port = network_->libertyPort(load_pin);
-                if (load_port) {
-                  excluded_cap += load_port->capacitance();
                 }
               }
             }
@@ -613,12 +663,21 @@ void RepairHold::repairEndHold(Vertex* end_vertex,
                        delayAsString(slacks[rise_index_][max_index_], sta_),
                        delayAsString(slacks[fall_index_][max_index_], sta_),
                        load_pins.size());
-            Scene* corner = sta_->cmdScene();
-            float load_cap
-                = graph_delay_calc_->loadCap(end_vertex->pin(), corner, max_)
-                  - excluded_cap;
-            ArcDelay buffer_delays[RiseFall::index_count];
-            Slew buffer_slews[RiseFall::index_count];
+            sta::Scene* corner = sta_->cmdScene();
+            // Compute load cap as the sum of the pin capacitances that the
+            // inserted hold buffer will drive. Using loadCap on the driver pin
+            // would include the full original-net parasitics which are absent
+            // on the post-split net, causing the guard below to over-reject
+            // valid insertions.
+            float load_cap = 0.0;
+            for (const sta::Pin* load_pin : load_pins) {
+              sta::LibertyPort* load_port = network_->libertyPort(load_pin);
+              if (load_port) {
+                load_cap += load_port->capacitance();
+              }
+            }
+            sta::ArcDelay buffer_delays[sta::RiseFall::index_count];
+            sta::Slew buffer_slews[sta::RiseFall::index_count];
             resizer_->bufferDelays(buffer_cell,
                                    load_cap,
                                    corner,
@@ -646,35 +705,39 @@ void RepairHold::repairEndHold(Vertex* end_vertex,
               // Despite checking for setup slack to insert the bufffer,
               // increased slews downstream can increase delays and
               // reduce setup slack in ways that are too expensive to
-              // predict. Use the journal to back out the change if
-              // the hold buffer blows through the setup margin.
+              // predict. Open a journal so a failed hold fix can be
+              // rolled back via journalRestore().
               resizer_->journalBegin();
-              Slack setup_slack_before = sta_->worstSlack(max_);
-              Slew slew_before = sta_->slew(path_vertex,
-                                            sta::RiseFallBoth::riseFall(),
-                                            sta_->scenes(),
-                                            max_);
-              makeHoldDelay(path_vertex,
-                            load_pins,
-                            loads_have_out_port,
-                            buffer_cell,
-                            buffer_loc);
-              Slew slew_after = sta_->slew(path_vertex,
-                                           sta::RiseFallBoth::riseFall(),
-                                           sta_->scenes(),
-                                           max_);
-              Slack setup_slack_after = sta_->worstSlack(max_);
+              sta::Slack setup_slack_before = sta_->worstSlack(max_);
+              sta::Slew slew_before = sta_->slew(path_vertex,
+                                                 sta::RiseFallBoth::riseFall(),
+                                                 sta_->scenes(),
+                                                 max_);
+              const HoldMoveStats move = makeHoldDelay(path_vertex,
+                                                       load_pins,
+                                                       loads_have_out_port,
+                                                       buffer_cell,
+                                                       buffer_loc);
+              sta::Slew slew_after = sta_->slew(path_vertex,
+                                                sta::RiseFallBoth::riseFall(),
+                                                sta_->scenes(),
+                                                max_);
+              sta::Slack setup_slack_after = sta_->worstSlack(max_);
               float slew_factor
                   = (slew_before > 0) ? slew_after / slew_before : 1.0;
 
               if (slew_factor > 1.20
                   || (!allow_setup_violations
-                      && fuzzyLess(setup_slack_after, setup_slack_before)
+                      && sta::fuzzyLess(setup_slack_after, setup_slack_before)
                       && setup_slack_after < setup_margin)) {
                 resizer_->journalRestore();
-                inserted_buffer_count_ = 0;
               } else {
                 resizer_->journalEnd();
+                inserted_buffer_count_ += move.buffers;
+                resize_count_ += move.resizes;
+                if (group_only) {
+                  group_hold_slack = holdSlack(end_vertex);
+                }
               }
             }
           }
@@ -686,10 +749,10 @@ void RepairHold::repairEndHold(Vertex* end_vertex,
 
 void RepairHold::mergeInit(Slacks& slacks)
 {
-  slacks[rise_index_][min_index_] = INF;
-  slacks[fall_index_][min_index_] = INF;
-  slacks[rise_index_][max_index_] = -INF;
-  slacks[fall_index_][max_index_] = -INF;
+  slacks[rise_index_][min_index_] = sta::INF;
+  slacks[fall_index_][min_index_] = sta::INF;
+  slacks[rise_index_][max_index_] = sta::INF;
+  slacks[fall_index_][max_index_] = sta::INF;
 }
 
 void RepairHold::mergeInto(Slacks& from, Slacks& result)
@@ -699,29 +762,25 @@ void RepairHold::mergeInto(Slacks& from, Slacks& result)
   result[fall_index_][min_index_]
       = min(result[fall_index_][min_index_], from[fall_index_][min_index_]);
   result[rise_index_][max_index_]
-      = max(result[rise_index_][max_index_], from[rise_index_][max_index_]);
+      = min(result[rise_index_][max_index_], from[rise_index_][max_index_]);
   result[fall_index_][max_index_]
-      = max(result[fall_index_][max_index_], from[fall_index_][max_index_]);
+      = min(result[fall_index_][max_index_], from[fall_index_][max_index_]);
 }
 
-void RepairHold::makeHoldDelay(sta::Vertex* drvr,
-                               sta::PinSeq& load_pins,
-                               bool loads_have_out_port,  // top level port
-                               sta::LibertyCell* buffer_cell,
-                               const odb::Point& loc)
+RepairHold::HoldMoveStats RepairHold::makeHoldDelay(
+    sta::Vertex* drvr,
+    sta::PinSeq& load_pins,
+    bool loads_have_out_port,  // top level port
+    sta::LibertyCell* buffer_cell,
+    const odb::Point& loc)
 {
+  HoldMoveStats stats;
   sta::Instance* buffer = nullptr;
   sta::Pin* buffer_out_pin = nullptr;
 
   // New insert buffer behavior
   sta::Pin* drvr_pin = drvr->pin();
-  odb::dbObject* drvr_db_pin = db_network_->staToDb(drvr_pin);
-  odb::dbNet* drvr_dbnet = nullptr;
-  if (drvr_db_pin->getObjectType() == odb::dbObjectType::dbBTermObj) {
-    drvr_dbnet = static_cast<odb::dbBTerm*>(drvr_db_pin)->getNet();
-  } else {
-    drvr_dbnet = static_cast<odb::dbITerm*>(drvr_db_pin)->getNet();
-  }
+  odb::dbNet* drvr_dbnet = db_network_->findFlatDbNet(drvr_pin);
 
   sta::Net* drvr_net = db_network_->dbToSta(drvr_dbnet);
 
@@ -735,25 +794,27 @@ void RepairHold::makeHoldDelay(sta::Vertex* drvr,
       load_pins_set.insert(const_cast<sta::Pin*>(load_pin));
     }
   }
+  if (load_pins_set.empty()) {
+    return stats;
+  }
 
   buffer = resizer_->insertBufferBeforeLoads(
       drvr_net, &load_pins_set, buffer_cell, &loc, "hold");
   if (buffer == nullptr) {
-    const char* drvr_pin_name = db_network_->pathName(drvr_pin);
+    std::string drvr_pin_name = db_network_->pathName(drvr_pin);
     logger_->error(RSZ,
                    3009,
                    "insert_buffer failed on drvr_pin '{}'.",
-                   drvr_pin_name ? drvr_pin_name : "<unknown>");
-    return;
+                   drvr_pin_name.empty() ? "<unknown>" : drvr_pin_name);
+    return stats;
   }
+  stats.buffers = 1;
 
   odb::dbInst* new_buffer = db_network_->staToDb(buffer);
   debugPrint(
       logger_, RSZ, "repair_hold", 3, " insert {}", new_buffer->getName());
 
   buffer_out_pin = db_network_->dbToSta(new_buffer->getFirstOutput());
-
-  inserted_buffer_count_++;
 
   // Update RC and delay. Resize if necessary
   sta::Vertex* buffer_out_vertex = graph_->pinDrvrVertex(buffer_out_pin);
@@ -763,37 +824,45 @@ void RepairHold::makeHoldDelay(sta::Vertex* drvr,
   if (!checkMaxSlewCap(buffer_out_pin)
       && resizer_->resizeToTargetSlew(buffer_out_pin)) {
     estimate_parasitics_->updateParasitics();
-    resize_count_++;
+    stats.resizes = 1;
   }
+  return stats;
 }
 
 bool RepairHold::checkMaxSlewCap(const sta::Pin* drvr_pin)
 {
   float cap, limit, slack;
-  const Scene* corner;
-  const RiseFall* tr;
+  const sta::Scene* corner;
+  const sta::RiseFall* tr;
+  float slack_limit_ratio;
+
   sta_->checkCapacitance(
       drvr_pin, sta_->scenes(), max_, cap, limit, slack, tr, corner);
-  float slack_limit_ratio = slack / limit;
-  if (slack_limit_ratio < hold_slack_limit_ratio_max_) {
-    return false;
+  // checkCapacitance returns sentinel limit=-1E+30 when no
+  // limit exists, making slack/limit=-1.0 which falsely fails the threshold
+  // check.
+  if (corner) {
+    slack_limit_ratio = slack / limit;
+    if (slack_limit_ratio < hold_slack_limit_ratio_max_) {
+      return false;
+    }
   }
 
   sta::Slew slew;
   sta_->checkSlew(
       drvr_pin, sta_->scenes(), max_, false, slew, limit, slack, tr, corner);
-  slack_limit_ratio = slack / limit;
-  if (slack_limit_ratio < hold_slack_limit_ratio_max_) {
-    return false;
+  // checkSlew returns sentinel limit=0.0 when no limit exists, avoid
+  // divide-by-zero
+  if (corner) {
+    slack_limit_ratio = slack / limit;
+    if (slack_limit_ratio < hold_slack_limit_ratio_max_) {
+      return false;
+    }
   }
 
   resizer_->checkLoadSlews(drvr_pin, 0.0, slew, limit, slack, corner);
   slack_limit_ratio = slack / limit;
-  if (slack_limit_ratio < hold_slack_limit_ratio_max_) {
-    return false;
-  }
-
-  return true;
+  return slack_limit_ratio >= hold_slack_limit_ratio_max_;
 }
 
 void RepairHold::printProgress(int iteration, bool force, bool end) const
@@ -808,10 +877,26 @@ void RepairHold::printProgress(int iteration, bool force, bool end) const
   }
 
   if (iteration % print_interval_ == 0 || force || end) {
-    sta::Slack wns;
-    sta::Vertex* worst_vertex;
-    sta_->worstSlack(min_, wns, worst_vertex);
-    const sta::Slack tns = sta_->totalNegativeSlack(min_);
+    sta::Slack wns = sta::INF;
+    sta::Vertex* worst_vertex = nullptr;
+    sta::Slack tns = 0.0;
+    const PathGroupFilter path_group_filter(resizer_);
+    if (path_group_filter.enabled()) {
+      // Report the group being repaired, as the setup progress table does.
+      const std::optional<PathGroupFilter::GroupWorst> worst
+          = path_group_filter.groupWorst(min_);
+      if (worst.has_value()) {
+        wns = worst->slack;
+        worst_vertex = graph_->pinLoadVertex(worst->endpoint);
+      }
+      for (const auto& [endpoint_pin, slack] :
+           path_group_filter.groupEndpointSlacks(min_, 0.0)) {
+        tns = sta::delayAsFloat(tns) + sta::delayAsFloat(slack);
+      }
+    } else {
+      sta_->worstSlack(min_, wns, worst_vertex);
+      tns = sta_->totalNegativeSlack(min_);
+    }
 
     std::string itr_field = fmt::format("{}", iteration);
     if (end) {
@@ -829,9 +914,9 @@ void RepairHold::printProgress(int iteration, bool force, bool end) const
         inserted_buffer_count_,
         cloned_gate_count_,
         area_growth / initial_design_area_ * 1e2,
-        delayAsString(wns, sta_, 3),
-        delayAsString(tns, sta_, 3),
-        worst_vertex->name(network_));
+        delayAsString(wns, 3, sta_),
+        delayAsString(tns, 3, sta_),
+        worst_vertex != nullptr ? worst_vertex->name(network_) : "");
 
     debugPrint(logger_, RSZ, "memory", 1, "RSS = {}", utl::getCurrentRSS());
   }

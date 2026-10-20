@@ -141,7 +141,6 @@ remove_buffers_cmd(InstanceSeq *insts)
   Resizer *resizer = getResizer();
   if (insts) {
     resizer->removeBuffers(*insts);
-    delete insts;
   } else {
     resizer->removeBuffers({});
   }
@@ -176,7 +175,6 @@ void
 set_dont_use(LibertyCell *lib_cell,
              bool dont_use)
 {
-  ensureLinked();
   Resizer *resizer = getResizer();
   resizer->setDontUse(lib_cell, dont_use);
 }
@@ -184,7 +182,6 @@ set_dont_use(LibertyCell *lib_cell,
 void
 reset_dont_use()
 {
-  ensureLinked();
   Resizer *resizer = getResizer();
   resizer->resetDontUse();
 }
@@ -311,6 +308,7 @@ repair_design_cmd(double max_length,
                   double cap_margin,
                   bool pre_placement,
                   bool match_cell_footprint,
+                  bool reroute,
                   bool verbose)
 {
   ensureLinked();
@@ -320,6 +318,7 @@ repair_design_cmd(double max_length,
                         cap_margin,
                         pre_placement,
                         match_cell_footprint,
+                        reroute,
                         verbose);
 }
 
@@ -366,25 +365,40 @@ repair_setup(double setup_margin,
              bool match_cell_footprint,
              bool verbose,
              std::vector<rsz::MoveType> sequence,
+             const char* phases,
+             const char* path_group,
              bool skip_pin_swap,
              bool skip_gate_cloning,
-             bool skip_size_down,
+             bool skip_size_down_fanout,
              bool skip_buffering,
              bool skip_buffer_removal,
+             bool skip_buffer_to_inverters,
              bool skip_last_gasp,
              bool skip_vt_swap,
-             bool skip_crit_vt_swap)
+             bool skip_crit_vt_swap,
+             const char* effort,
+             int profile_mode,
+             const char* profile_dir)
 {
   ensureLinked();
   Resizer *resizer = getResizer();
   return resizer->repairSetup(setup_margin, repair_tns_end_percent,
                        max_passes, max_iterations,
                        max_repairs_per_pass, match_cell_footprint,
-                       verbose, sequence,
+                       verbose, sequence, phases, path_group,
                        skip_pin_swap, skip_gate_cloning,
-                       skip_size_down,
-                       skip_buffering, skip_buffer_removal,
-                       skip_last_gasp, skip_vt_swap, skip_crit_vt_swap);
+                       skip_size_down_fanout,
+                       skip_buffering, skip_buffer_removal, skip_buffer_to_inverters,
+                       skip_last_gasp, skip_vt_swap, skip_crit_vt_swap,
+                       Resizer::repairEffortFromString(effort),
+                       profile_mode, profile_dir);
+}
+
+std::string
+resolve_path_group(const char* path_group)
+{
+  ensureLinked();
+  return getResizer()->resolvePathGroup(path_group);
 }
 
 void
@@ -411,7 +425,8 @@ repair_hold(double setup_margin,
             int max_passes,
             int max_iterations,
             bool match_cell_footprint,
-            bool verbose)
+            bool verbose,
+            const char* path_group)
 {
   ensureLinked();
   Resizer *resizer = getResizer();
@@ -419,7 +434,7 @@ repair_hold(double setup_margin,
                       allow_setup_violations,
                       max_buffer_percent, max_passes,
                       max_iterations, match_cell_footprint,
-                      verbose);
+                      verbose, path_group);
 }
 
 void
@@ -575,7 +590,9 @@ PinSet
 find_fanin_fanouts(PinSet* pins)
 {
   Resizer *resizer = getResizer();
-  return resizer->findFaninFanouts(*pins);
+  PinSet result = resizer->findFaninFanouts(*pins);
+  delete pins; // memory leak fix
+  return result;
 }
 
 void
@@ -614,6 +631,40 @@ void report_buffers_cmd(bool filtered)
   ensureLinked();
   Resizer* resizer = getResizer();
   resizer->reportBuffers(filtered);
+}
+
+void report_delay_estimator_accuracy_cmd(Instance* inst,
+                                         LibertyCell* replacement,
+                                         const char* estimator,
+                                         int delay_levels)
+{
+  ensureLinked();
+  Resizer* resizer = getResizer();
+  resizer->reportDelayEstimatorAccuracy(
+      inst, replacement, std::string(estimator), delay_levels);
+}
+
+void report_delay_estimator_accuracy_for_rebuffering_cmd(Instance* inst,
+                                                         Pin* driver_pin,
+                                                         int delay_levels)
+{
+  ensureLinked();
+  Resizer* resizer = getResizer();
+  resizer->reportDelayEstimatorAccuracyForRebufferTree(
+      inst, driver_pin, delay_levels);
+}
+
+bool is_valid_accuracy_estimator_cmd(const char* name)
+{
+  return Resizer::isValidDelayEstimatorName(std::string(name));
+}
+
+const char* accuracy_estimator_names_cmd()
+{
+  static const std::string names = []() {
+    return Resizer::delayEstimatorNames();
+  }();
+  return names.c_str();
 }
 
 void

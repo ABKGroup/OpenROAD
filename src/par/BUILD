@@ -2,9 +2,10 @@
 # Copyright (c) 2025, The OpenROAD Authors
 
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
-load("//bazel:python_wrap_cc.bzl", "python_wrap_cc")
+load("//bazel:python_wrap_cc.bzl", "python_wrap_cc", "python_wrap_library")
 load("//bazel:tcl_encode_or.bzl", "tcl_encode")
 load("//bazel:tcl_wrap_cc.bzl", "tcl_wrap_cc")
+load("//test:regression.bzl", "messages_txt")
 
 package(
     default_visibility = ["//:__subpackages__"],
@@ -54,19 +55,12 @@ cc_library(
         "//src/dbSta",
         "//src/dbSta:dbNetwork",
         "//src/dbSta:dbReadVerilog",
-        "//src/gui",
-        "//src/odb",
+        "//src/odb/src/db",
         "//src/sta:opensta_lib",
         "//src/utl",
-        "@boost.format",
-        "@boost.geometry",
-        "@boost.polygon",
-        "@boost.property_tree",
-        "@boost.random",
         "@boost.range",
-        "@boost.tokenizer",
-        "@boost.utility",
         "@or-tools//ortools/linear_solver",
+        "@or-tools//ortools/linear_solver:linear_solver_base",
     ],
 )
 
@@ -89,20 +83,8 @@ cc_library(
     deps = [
         ":par",
         "//:ord",
-        "//src/dbSta",
-        "//src/gui",
-        "//src/odb",
-        "//src/sta:opensta_lib",
         "//src/utl",
-        "@boost.format",
-        "@boost.geometry",
-        "@boost.polygon",
-        "@boost.property_tree",
-        "@boost.random",
-        "@boost.range",
         "@boost.stacktrace",
-        "@boost.tokenizer",
-        "@boost.utility",
         "@tcl_lang//:tcl",
     ],
 )
@@ -148,4 +130,26 @@ python_wrap_cc(
     deps = [
         "//src/odb:swig-py",
     ],
+)
+
+filegroup(
+    name = "doc_files",
+    srcs = [
+        "README.md",
+        "src/partitionmgr.tcl",
+    ],
+    visibility = ["//src/par/test:__pkg__"],
+)
+
+messages_txt(
+    visibility = [
+        "//docs:__pkg__",
+        "//src/par/test:__pkg__",
+    ],
+)
+
+python_wrap_library(
+    name = "py_wrap",
+    includes = ["src"],
+    deps = [":par"],
 )

@@ -3,12 +3,11 @@
 
 #pragma once
 
-#include "AbstractRoutingCongestionDataSource.h"
 #include "grt/GlobalRouter.h"
 #include "grt/Rudy.h"
-#include "gui/heatMap.h"
 #include "odb/dbBlockCallBackObj.h"
 #include "odb/util.h"
+#include "web/heatMap.h"
 
 namespace odb {
 class dbDatabase;
@@ -16,8 +15,7 @@ class dbDatabase;
 
 namespace grt {
 
-class RUDYDataSource : public gui::GlobalRoutingDataSource,
-                       public AbstractRoutingCongestionDataSource,
+class RUDYDataSource : public web::GlobalRoutingDataSource,
                        public odb::dbBlockCallBackObj
 {
  public:
@@ -25,15 +23,11 @@ class RUDYDataSource : public gui::GlobalRoutingDataSource,
                  grt::GlobalRouter* grouter,
                  odb::dbDatabase* db);
 
-  void registerHeatMap() override { gui::HeatMapDataSource::registerHeatMap(); }
-  void update() override { gui::HeatMapDataSource::update(); }
-
   void onShow() override;
   void onHide() override;
 
   // from dbBlockCallBackObj API
   void inDbInstCreate(odb::dbInst*) override;
-  void inDbInstCreate(odb::dbInst*, odb::dbRegion*) override;
   void inDbInstDestroy(odb::dbInst*) override;
   void inDbInstPlacementStatusBefore(odb::dbInst*,
                                      const odb::dbPlacementStatus&) override;
@@ -60,5 +54,9 @@ class RUDYDataSource : public gui::GlobalRoutingDataSource,
   grt::Rudy* rudy_;
   bool selection_only_;
 };
+
+web::HeatMapSourceHandle registerRudyHeatMapSource(utl::Logger* logger,
+                                                   grt::GlobalRouter* grouter,
+                                                   odb::dbDatabase* db);
 
 }  // namespace grt

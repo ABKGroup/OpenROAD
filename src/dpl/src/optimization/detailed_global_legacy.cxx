@@ -278,7 +278,7 @@ bool DetailedGlobalSwap::calculateEdgeBB(Edge* ed, Node* nd, odb::Rect& bbox)
     ++count;
   }
 
-  return (count == 0) ? false : true;
+  return count != 0;
 }
 ////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
@@ -412,6 +412,7 @@ void DetailedGlobalSwap::stats()
       attempts_,
       swaps_,
       moves_);
+  mgr_->addAttempts(attempts_);
 }
 
 }  // namespace legacy

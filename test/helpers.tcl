@@ -202,6 +202,13 @@ proc diff_files { file1 file2 { ignore "" } } {
   }
 }
 
+proc require_snapshot_batched_activity { test_name } {
+  if { [grt::get_snapshot_batch_count] <= 0 } {
+    utl::error GRT 713 \
+      "$test_name did not execute snapshot-batched routing."
+  }
+}
+
 proc run_unit_test_and_exit { relative_path } {
   set test_dir [pwd]
   set openroad_dir [file dirname [file dirname [file dirname $test_dir]]]
@@ -262,6 +269,20 @@ proc check { description test expected_value } {
   }
 }
 
+# Expects script to fail with the given message id (e.g. ANT-0012), which
+# utl::error reports as the Tcl error result.
+proc check_error { description script error_id } {
+  if { ![catch { uplevel 1 $script } msg] } {
+    incr ::failing_checks
+    error "FAIL: $description: Expected error $error_id from \{$script\}"
+  } elseif { [string first $error_id $msg] == -1 } {
+    incr ::failing_checks
+    error "FAIL: $description: Expected error $error_id, got: $msg"
+  } else {
+    incr ::passing_checks
+  }
+}
+
 proc exit_summary { } {
   set total_checks [expr { $::passing_checks + $::failing_checks }]
   if { $total_checks > 0 } {
@@ -274,7 +295,8 @@ proc exit_summary { } {
   } else {
     puts "Summary 0 checks run"
   }
-  exit $::failing_checks
+  # A count could wrap to 0 as an exit status.
+  exit [expr { $::failing_checks > 0 }]
 }
 
 # Reading DEF file
@@ -296,6 +318,20 @@ suppress_message ORD 30
 # suppress grt message with the suggested adjustment
 suppress_message GRT 303
 suppress_message GRT 704
+
+# suppress elapsed time messages (non-deterministic)
+suppress_message CTS 500
+suppress_message DPL 500
+suppress_message DRT 501
+suppress_message GPL 500
+suppress_message IFP 500
+suppress_message IFP 501
+suppress_message MPL 500
+suppress_message RSZ 504
+suppress_message RSZ 505
+suppress_message RSZ 506
+suppress_message RSZ 507
+suppress_message PDN 500
 
 proc get_3dblox_marker_count { category_name } {
   set top_chip [[ord::get_db] getChip]

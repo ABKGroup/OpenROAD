@@ -10,9 +10,10 @@ swig_lib(NAME      est
          SCRIPTS   EstimateParasitics.tcl
 )
 
+find_package(OpenMP REQUIRED)
+
 add_library(est_lib
     EstimateParasitics.cpp
-    EstimateParasiticsCallBack.cpp
     MakeWireParasitics.cpp
     OdbCallBack.cpp
     SteinerTree.cpp
@@ -40,6 +41,8 @@ target_include_directories(est_lib
 )
 
 target_link_libraries(est_lib
+  PRIVATE
+    OpenMP::OpenMP_CXX
   PUBLIC
     stt_lib
     odb

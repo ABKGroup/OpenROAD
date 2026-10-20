@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <set>
 #include <string>
 
@@ -14,8 +15,11 @@
 #include "odb/dbTypes.h"
 #include "odb/geom.h"
 #include "odb/isotropy.h"
+#include "utl/Logger.h"
 
 namespace dpl {
+
+using utl::DPL;
 
 namespace cell_edges {
 odb::Rect transformEdgeRect(const odb::Rect& edge_rect,
@@ -50,11 +54,13 @@ odb::Rect getQueryRect(const odb::Rect& edge_box, const int spc)
 };  // namespace cell_edges
 
 // Constructor
-PlacementDRC::PlacementDRC(Grid* grid,
+PlacementDRC::PlacementDRC(utl::Logger* logger,
+                           Grid* grid,
                            odb::dbTech* tech,
                            Padding* padding,
                            bool disallow_one_site_gap)
-    : grid_(grid),
+    : logger_(logger),
+      grid_(grid),
       padding_(padding),
       disallow_one_site_gap_(disallow_one_site_gap)
 {
@@ -156,21 +162,50 @@ bool PlacementDRC::checkEdgeSpacing(const Node* cell,
 
 bool PlacementDRC::checkBlockedLayers(const Node* cell) const
 {
-  return checkBlockedLayers(cell, grid_->gridX(cell), grid_->gridRoundY(cell));
+  return checkBlockedLayers(
+      cell, grid_->gridX(cell), grid_->gridRoundY(cell), cell->getOrient());
 }
 
 bool PlacementDRC::checkBlockedLayers(const Node* cell,
                                       const GridX x,
-                                      const GridY y) const
+                                      const GridY y,
+                                      const odb::dbOrientType& orient) const
 {
   const GridX x_begin = x;
   const GridY y_begin = y;
   const GridX x_end = x + grid_->gridWidth(cell);
   const GridY y_end = grid_->gridEndY(grid_->gridYToDbu(y) + cell->getHeight());
+  // Pin layers whose power via/patch metal lies somewhere in the footprint
+  uint8_t pin_layers = 0;
   for (GridY y1 = y_begin; y1 < y_end; y1++) {
     for (GridX x1 = x_begin; x1 < x_end; x1++) {
       const Pixel* pixel = grid_->gridPixel(x1, y1);
-      if (pixel != nullptr && pixel->blocked_layers & cell->getUsedLayers()) {
+      if (pixel == nullptr) {
+        continue;
+      }
+      if (pixel->blocked_layers & cell->getUsedLayers()) {
+        return false;
+      }
+      pin_layers |= pixel->blocked_pin_layers & cell->getPinLayers();
+    }
+  }
+  if (pin_layers == 0) {
+    return true;
+  }
+
+  // The via/patch metal is much smaller than a pixel, so check the pin
+  // shapes on those layers against the actual metal.
+  const Master* master = cell->getMaster();
+  const DbuX x_real = gridToDbu(x, grid_->getSiteWidth());
+  const DbuY y_real = grid_->gridYToDbu(y);
+  for (int level = 1; level <= kMaxPinLevel; level++) {
+    if ((pin_layers & (1 << level)) == 0) {
+      continue;
+    }
+    for (const odb::Rect& shape : master->getPinShapes(level)) {
+      const odb::Rect pin_rect
+          = cell_edges::transformEdgeRect(shape, cell, x_real, y_real, orient);
+      if (grid_->overlapsPinBlockage(level, pin_rect)) {
         return false;
       }
     }
@@ -189,8 +224,66 @@ bool PlacementDRC::checkDRC(const Node* cell,
                             const GridY y,
                             const odb::dbOrientType& orient) const
 {
-  return checkEdgeSpacing(cell, x, y, orient) && checkPadding(cell, x, y)
-         && checkBlockedLayers(cell, x, y) && checkOneSiteGap(cell, x, y);
+  if (!logger_->debugCheck(DPL, "checkDRC", 1)) {
+    // Fast path: bail on the first failing check, cheapest first.
+    return checkBlockedLayers(cell, x, y, orient) && checkOneSiteGap(cell, x, y)
+           && checkPadding(cell, x, y) && checkEdgeSpacing(cell, x, y, orient);
+  }
+
+  // Debug path: evaluate every check so the report shows each one.
+  const bool edge_ok = checkEdgeSpacing(cell, x, y, orient);
+  const bool padding_ok = checkPadding(cell, x, y);
+  const bool blocked_ok = checkBlockedLayers(cell, x, y, orient);
+  const bool gap_ok = checkOneSiteGap(cell, x, y);
+
+  const bool all_ok = edge_ok && padding_ok && blocked_ok && gap_ok;
+
+  if (!all_ok) {
+    const std::string cell_name = cell->name();
+    debugPrint(
+        logger_,
+        DPL,
+        "checkDRC",
+        1,
+        "cell {} at ({}, {}): ok?={} edge={} padding={} blocked={} gap={}",
+        cell_name,
+        x.v,
+        y.v,
+        all_ok ? 1 : 0,
+        edge_ok ? 1 : 0,
+        padding_ok ? 1 : 0,
+        blocked_ok ? 1 : 0,
+        gap_ok ? 1 : 0);
+  }
+
+  return all_ok;
+}
+
+int PlacementDRC::countDRCViolations(const Node* cell) const
+{
+  return countDRCViolations(
+      cell, grid_->gridX(cell), grid_->gridRoundY(cell), cell->getOrient());
+}
+
+int PlacementDRC::countDRCViolations(const Node* cell,
+                                     const GridX x,
+                                     const GridY y,
+                                     const odb::dbOrientType& orient) const
+{
+  int count = 0;
+  if (!checkEdgeSpacing(cell, x, y, orient)) {
+    ++count;
+  }
+  if (!checkPadding(cell, x, y)) {
+    ++count;
+  }
+  if (!checkBlockedLayers(cell, x, y, orient)) {
+    ++count;
+  }
+  if (!checkOneSiteGap(cell, x, y)) {
+    ++count;
+  }
+  return count;
 }
 
 namespace {

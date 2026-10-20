@@ -3,9 +3,11 @@
 
 #include "odb/3dblox.h"
 
+#include <cmath>
 #include <cstddef>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <set>
 #include <sstream>
 #include <string>
@@ -21,6 +23,7 @@
 #include "dbxParser.h"
 #include "dbxWriter.h"
 #include "objects.h"
+#include "odb/PtrSetMap.h"
 #include "odb/db.h"
 #include "odb/dbTransform.h"
 #include "odb/dbTypes.h"
@@ -29,9 +32,13 @@
 #include "odb/geom.h"
 #include "odb/lefin.h"
 #include "odb/lefout.h"
+#include "sta/ConcreteNetwork.hh"
+#include "sta/NetworkClass.hh"
 #include "sta/Sta.hh"
+#include "sta/VerilogReader.hh"
 #include "utl/Logger.h"
 #include "utl/ScopedTemporaryFile.h"
+#include "verilogWriter.h"
 namespace odb {
 
 static std::map<std::string, std::string> dup_orient_map
@@ -78,6 +85,94 @@ void ThreeDBlox::readDbv(const std::string& dbv_file)
   }
 }
 
+void ThreeDBlox::buildChipNetsFromVerilog(dbChip* chip, const DbxData& data)
+{
+  // Read Verilog and create nets
+  if (!sta_ || data.design.external.verilog_file.empty()) {
+    return;
+  }
+
+  std::string verilog_file = data.design.external.verilog_file;
+  if (!std::filesystem::exists(verilog_file)) {
+    return;
+  }
+
+  sta::ConcreteNetwork temp_network;
+  temp_network.copyState(sta_);
+  sta::VerilogReader verilog_reader(&temp_network);
+
+  if (!verilog_reader.read(verilog_file.c_str())) {
+    return;
+  }
+
+  sta::Instance* top_inst
+      = verilog_reader.linkNetwork(data.design.name.c_str(), true, false);
+  if (!top_inst) {
+    logger_->warn(utl::ODB,
+                  555,
+                  "Verilog module {} not found in Verilog file {}.",
+                  data.design.name,
+                  verilog_file);
+    return;
+  }
+
+  // Process nets
+  std::unique_ptr<sta::NetIterator> net_iter(
+      temp_network.netIterator(top_inst));
+  while (net_iter->hasNext()) {
+    auto* net = net_iter->next();
+    const std::string net_name = temp_network.name(net);
+    auto* chip_net = dbChipNet::create(chip, net_name);
+
+    debugPrint(logger_,
+               utl::ODB,
+               "3dblox",
+               1,
+               "Created dbChipNet {} for chip {} from Verilog",
+               net_name,
+               chip->getName());
+
+    std::unique_ptr<sta::NetPinIterator> pin_iter(
+        temp_network.pinIterator(net));
+    while (pin_iter->hasNext()) {
+      const sta::Pin* pin = pin_iter->next();
+      const sta::Instance* instance = temp_network.instance(pin);
+
+      if (instance == top_inst) {
+        continue;
+      }
+
+      auto* chip_inst = chip->findChipInst(temp_network.name(instance));
+      if (!chip_inst) {
+        continue;
+      }
+
+      const std::string port_name = temp_network.name(temp_network.port(pin));
+      dbChip* master = chip_inst->getMasterChip();
+
+      dbBTerm* bterm = master->getBlock()->findBTerm(port_name.c_str());
+      if (!bterm) {
+        continue;
+      }
+      dbChipBump* bump = bterm->getChipBump();
+      if (!bump) {
+        continue;
+      }
+      auto* region_inst = chip_inst->findChipRegionInst(bump->getChipRegion());
+      if (!region_inst) {
+        continue;
+      }
+
+      for (auto bump_inst : region_inst->getChipBumpInsts()) {
+        if (bump_inst->getChipBump() == bump) {
+          chip_net->addBumpInst(bump_inst, {chip_inst});
+          break;
+        }
+      }
+    }
+  }
+}
+
 void ThreeDBlox::readDbx(const std::string& dbx_file)
 {
   read_files_.insert(std::filesystem::absolute(dbx_file).string());
@@ -88,16 +183,28 @@ void ThreeDBlox::readDbx(const std::string& dbx_file)
   for (const auto& [_, chip_inst] : data.chiplet_instances) {
     createChipInst(chip_inst);
   }
+
+  buildChipNetsFromVerilog(chip, data);
+
   for (const auto& [_, connection] : data.connections) {
     createConnection(connection);
   }
   calculateSize(chip);
+  for (const auto& [_, assertion] : data.path_assertions) {
+    dbChipPath* chip_path = dbChipPath::create(chip, assertion.name.c_str());
+    for (const auto& entry : assertion.entries) {
+      // Resolve the dotted path string to a live DB object
+      std::vector<dbChipInst*> path_insts;
+      dbChipRegionInst* region_inst = resolvePath(entry.region, path_insts);
+      chip_path->addEntry(path_insts, region_inst, entry.negated);
+    }
+  }
 }
 
 void ThreeDBlox::check()
 {
-  Checker checker(logger_);
-  checker.check(db_->getChip());
+  Checker checker(logger_, db_);
+  checker.check();
 }
 
 namespace {
@@ -205,8 +312,21 @@ void ThreeDBlox::writeDbx(const std::string& dbx_file, odb::dbChip* chip)
 
   writeDbv(current_dir_path + chip->getName() + ".3dbv", chip);
 
+  // Write the Verilog connectivity file for this HIER chiplet.
+  writeVerilog(current_dir_path + chip->getName() + ".v", chip);
+
   DbxWriter writer(logger_, db_);
   writer.writeChiplet(dbx_file, chip);
+}
+
+void ThreeDBlox::writeVerilog(const std::string& verilog_file,
+                              odb::dbChip* chip)
+{
+  if (chip == nullptr) {
+    return;
+  }
+  VerilogWriter writer(logger_);
+  writer.writeChiplet(verilog_file, chip);
 }
 
 void ThreeDBlox::writeBMap(const std::string& bmap_file,
@@ -223,8 +343,8 @@ void ThreeDBlox::calculateSize(dbChip* chip)
   for (auto inst : chip->getChipInsts()) {
     cuboid.merge(inst->getCuboid());
   }
-  chip->setWidth(cuboid.dx());
-  chip->setHeight(cuboid.dy());
+  chip->setWidth(cuboid.xMax());
+  chip->setHeight(cuboid.yMax());
   chip->setThickness(cuboid.dz());
 }
 
@@ -332,33 +452,16 @@ void ThreeDBlox::createChiplet(const ChipletDef& chiplet)
     chip = dbChip::create(
         db_, tech, chiplet.name, getChipType(chiplet.type, logger_));
   }
-  if (!chiplet.external.verilog_file.empty()) {
-    if (odb::dbProperty::find(chip, "verilog_file") == nullptr) {
-      odb::dbStringProperty::create(
-          chip, "verilog_file", chiplet.external.verilog_file.c_str());
-    }
-  }
-  // Read DEF file
-  if (!chiplet.external.def_file.empty()) {
-    odb::defin def_reader(db_, logger_, odb::defin::DEFAULT);
-    std::vector<odb::dbLib*> search_libs;
-    for (odb::dbLib* lib : db_->getLibs()) {
-      search_libs.push_back(lib);
-    }
-    // No callbacks here as we are going to give one postRead3Dbx later
-    def_reader.readChip(search_libs,
-                        chiplet.external.def_file.c_str(),
-                        chip,
-                        /*issue_callback*/ false);
-  }
+
+  const int dbu_per_micron = db_->getDbuPerMicron();
   if (chiplet.design_width != -1.0) {
-    chip->setWidth(chiplet.design_width * db_->getDbuPerMicron());
+    chip->setWidth(std::round(chiplet.design_width * dbu_per_micron));
   }
   if (chiplet.design_height != -1.0) {
-    chip->setHeight(chiplet.design_height * db_->getDbuPerMicron());
+    chip->setHeight(std::round(chiplet.design_height * dbu_per_micron));
   }
   if (chiplet.thickness != -1.0) {
-    chip->setThickness(chiplet.thickness * db_->getDbuPerMicron());
+    chip->setThickness(std::round(chiplet.thickness * dbu_per_micron));
   }
   if (chiplet.shrink != -1.0) {
     chip->setShrink(chiplet.shrink);
@@ -366,23 +469,26 @@ void ThreeDBlox::createChiplet(const ChipletDef& chiplet)
   chip->setTsv(chiplet.tsv);
 
   if (chiplet.scribe_line_right != -1.0) {
-    chip->setScribeLineEast(chiplet.scribe_line_right * db_->getDbuPerMicron());
-    chip->setScribeLineWest(chiplet.scribe_line_left * db_->getDbuPerMicron());
-    chip->setScribeLineNorth(chiplet.scribe_line_top * db_->getDbuPerMicron());
-    chip->setScribeLineSouth(chiplet.scribe_line_bottom
-                             * db_->getDbuPerMicron());
+    chip->setScribeLineEast(
+        std::round(chiplet.scribe_line_right * dbu_per_micron));
+    chip->setScribeLineWest(
+        std::round(chiplet.scribe_line_left * dbu_per_micron));
+    chip->setScribeLineNorth(
+        std::round(chiplet.scribe_line_top * dbu_per_micron));
+    chip->setScribeLineSouth(
+        std::round(chiplet.scribe_line_bottom * dbu_per_micron));
   }
   if (chiplet.seal_ring_right != -1.0) {
-    chip->setSealRingEast(chiplet.seal_ring_right * db_->getDbuPerMicron());
-    chip->setSealRingWest(chiplet.seal_ring_left * db_->getDbuPerMicron());
-    chip->setSealRingNorth(chiplet.seal_ring_top * db_->getDbuPerMicron());
-    chip->setSealRingSouth(chiplet.seal_ring_bottom * db_->getDbuPerMicron());
+    chip->setSealRingEast(std::round(chiplet.seal_ring_right * dbu_per_micron));
+    chip->setSealRingWest(std::round(chiplet.seal_ring_left * dbu_per_micron));
+    chip->setSealRingNorth(std::round(chiplet.seal_ring_top * dbu_per_micron));
+    chip->setSealRingSouth(
+        std::round(chiplet.seal_ring_bottom * dbu_per_micron));
   }
 
-  chip->setOffset(Point(chiplet.offset.x * db_->getDbuPerMicron(),
-                        chiplet.offset.y * db_->getDbuPerMicron()));
-  if (chip->getChipType() != dbChip::ChipType::HIER
-      && chip->getBlock() == nullptr) {
+  chip->setOffset(Point(std::round(chiplet.offset.x * dbu_per_micron),
+                        std::round(chiplet.offset.y * dbu_per_micron)));
+  if (chip->getChipType() != dbChip::ChipType::HIER) {
     // blackbox stage, create block
     auto block = odb::dbBlock::create(chip, chiplet.name.c_str());
     const int x_min = chip->getScribeLineWest() + chip->getSealRingWest();
@@ -394,6 +500,40 @@ void ThreeDBlox::createChiplet(const ChipletDef& chiplet)
   }
   for (const auto& [_, region] : chiplet.regions) {
     createRegion(region, chip);
+  }
+
+  // Read the DEF file (if any) onto the block created above. The block and its
+  // bumps already exist, so the read uses the 3DBlox defin mode, which
+  // find-or-creates and dedups data shared with the bump map instead of
+  // erroring because a block is already present.
+  if (!chiplet.external.def_file.empty()) {
+    readDefForChip(chip, chiplet.external.def_file);
+  }
+}
+
+void ThreeDBlox::readDefForChip(dbChip* chip, const std::string& def_file)
+{
+  // Each chiplet may be given at most one DEF file, either by its definition
+  // (3dbv) or by one of its instances (3dbx). The chip is marked read even if
+  // the read fails so a later DEF cannot silently paper over the error.
+  if (!chips_with_def_.insert(chip).second) {
+    logger_->error(utl::ODB,
+                   547,
+                   "3DBlox Parser Error: a DEF file was already specified for "
+                   "chiplet {}",
+                   chip->getName());
+  }
+  odb::defin def_reader(db_, logger_, odb::defin::THREE_D_BLOX);
+  std::vector<odb::dbLib*> search_libs;
+  search_libs.assign(db_->getLibs().begin(), db_->getLibs().end());
+  // No callbacks here as we are going to give one postRead3Dbx later.
+  if (!def_reader.readChip(
+          search_libs, def_file.c_str(), chip, /*issue_callback*/ false)) {
+    logger_->error(utl::ODB,
+                   550,
+                   "Failed to read DEF file {} for chiplet {}",
+                   def_file,
+                   chip->getName());
   }
 }
 
@@ -428,9 +568,10 @@ void ThreeDBlox::createRegion(const ChipletRegion& region, dbChip* chip)
       chip, region.name, getChipRegionSide(region.side, logger_), layer);
   Rect box;
   box.mergeInit();
+  const int dbu_per_micron = db_->getDbuPerMicron();
   for (const auto& coord : region.coords) {
-    box.merge(Point(coord.x * db_->getDbuPerMicron(),
-                    coord.y * db_->getDbuPerMicron()),
+    box.merge(Point(std::round(coord.x * dbu_per_micron),
+                    std::round(coord.y * dbu_per_micron)),
               box);
   }
   chip_region->setBox(box);
@@ -472,12 +613,13 @@ void ThreeDBlox::createBump(const BumpMapEntry& entry,
     inst = dbInst::create(block, master, entry.bump_inst_name.c_str());
   }
   auto bump = dbChipBump::create(chip_region, inst);
+  const int dbu_per_micron = db_->getDbuPerMicron();
 
   Rect bbox;
   inst->getMaster()->getPlacementBoundary(bbox);
-  int x = (entry.x * db_->getDbuPerMicron()) - bbox.xCenter()
+  int x = std::round(entry.x * dbu_per_micron) - bbox.xCenter()
           + chip->getOffset().x();
-  int y = (entry.y * db_->getDbuPerMicron()) - bbox.yCenter()
+  int y = std::round(entry.y * dbu_per_micron) - bbox.yCenter()
           + chip->getOffset().y();
 
   inst->setOrigin(x, y);
@@ -570,11 +712,19 @@ void ThreeDBlox::createChipInst(const ChipletInst& chip_inst)
                    chip_inst.name);
   }
   inst->setOrient(orient.value());
+  const int dbu_per_micron = db_->getDbuPerMicron();
   inst->setLoc(Point3D{
-      static_cast<int>(chip_inst.loc.x * db_->getDbuPerMicron()),
-      static_cast<int>(chip_inst.loc.y * db_->getDbuPerMicron()),
-      static_cast<int>(chip_inst.z * db_->getDbuPerMicron()),
+      static_cast<int>(std::round(chip_inst.loc.x * dbu_per_micron)),
+      static_cast<int>(std::round(chip_inst.loc.y * dbu_per_micron)),
+      static_cast<int>(std::round(chip_inst.z * dbu_per_micron)),
   });
+
+  // Per the 3DBlox standard, the DEF file may be associated with the chiplet
+  // instance (ChipletInst.external) rather than the chiplet definition. Read it
+  // onto the referenced master chip's block.
+  if (!chip_inst.external.def_file.empty()) {
+    readDefForChip(chip, chip_inst.external.def_file);
+  }
 }
 static std::vector<std::string> splitPath(const std::string& path)
 {
@@ -659,7 +809,7 @@ void ThreeDBlox::createConnection(const Connection& connection)
                                       top_region,
                                       bottom_region_path,
                                       bottom_region);
-  conn->setThickness(connection.thickness * db_->getDbuPerMicron());
+  conn->setThickness(std::round(connection.thickness * db_->getDbuPerMicron()));
 }
 
 void ThreeDBlox::readBMap(const std::string& bmap_file)
@@ -681,7 +831,7 @@ void ThreeDBlox::readBMap(const std::string& bmap_file)
   };
 
   // Populate where the bpins should be made
-  std::map<odb::dbMaster*, BPinInfo> bpininfo;
+  odb::PtrMap<odb::dbMaster, BPinInfo> bpininfo;
   for (const auto& [inst, bterm] : bumps) {
     dbMaster* master = inst->getMaster();
     if (bpininfo.contains(master)) {
@@ -777,7 +927,7 @@ std::pair<dbInst*, odb::dbBTerm*> ThreeDBlox::createBump(
     }
     inst = dbInst::create(block, master, entry.bump_inst_name.c_str());
   }
-  inst->setOrigin(entry.x * dbus, entry.y * dbus);
+  inst->setOrigin(std::round(entry.x * dbus), std::round(entry.y * dbus));
   inst->setPlacementStatus(dbPlacementStatus::FIRM);
 
   dbNet* net = nullptr;

@@ -3,8 +3,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include <map>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -88,6 +90,12 @@ class lefTechLayerRectOnlyParser
   static bool parse(const std::string&, dbTechLayer*, lefinReader*);
 };
 
+class lefTechLayerBacksideParser
+{
+ public:
+  static bool parse(const std::string&, dbTechLayer*, lefinReader*);
+};
+
 class lefTechLayerTypeParser
 {
  public:
@@ -137,6 +145,23 @@ class lefTechLayerCutEnclosureRuleParser
                    odb::dbTechLayerCutEnclosureRule* rule,
                    odb::dbTechLayer* layer);
 };
+
+class lefTechLayerCutEnclosureTableRuleParser
+{
+ public:
+  lefTechLayerCutEnclosureTableRuleParser(lefinReader*);
+  void parse(std::string_view, odb::dbTechLayer*);
+
+ private:
+  lefinReader* lefin_;
+  // Tracks whether the property parsed so far is still valid. Any
+  // intermediate check (e.g. a reference that fails to resolve) that finds a
+  // problem sets this to false via a warning of its own; the overall parse
+  // is then rejected even if the grammar matched syntactically.
+  bool ruleValid_{true};
+  void checkCutClass(const std::string& val, odb::dbTechLayer* layer);
+};
+
 class lefTechLayerEolExtensionRuleParser
 {
  public:
@@ -185,9 +210,12 @@ class lefTechLayerAreaRuleParser
       const std::string&,
       odb::dbTechLayer* layer,
       std::vector<std::pair<odb::dbObject*, std::string>>& incomplete_props);
-  void setInt(double val,
-              odb::dbTechLayerAreaRule* rule,
-              void (odb::dbTechLayerAreaRule::*func)(int));
+  void setDist(double val,
+               odb::dbTechLayerAreaRule* rule,
+               void (odb::dbTechLayerAreaRule::*func)(int));
+  void setArea(double val,
+               odb::dbTechLayerAreaRule* rule,
+               void (odb::dbTechLayerAreaRule::*func)(int64_t));
   void setExceptEdgeLengths(const boost::fusion::vector<double, double>& params,
                             odb::dbTechLayerAreaRule* rule);
   void setExceptMinSize(const boost::fusion::vector<double, double>& params,
@@ -386,15 +414,14 @@ class lefTechLayerVoltageSpacing
 class AntennaGatePlusDiffParser
 {
  public:
-  AntennaGatePlusDiffParser(LefParser::lefiLayer* layer,
-                            lefinReader* lefinReader)
+  AntennaGatePlusDiffParser(dbTechLayer* layer, lefinReader* lefinReader)
       : layer_(layer), lefin_(lefinReader)
   {
   }
   void parse(const std::string&);
 
  private:
-  LefParser::lefiLayer* layer_;
+  dbTechLayer* layer_;
   lefinReader* lefin_;
 };
 

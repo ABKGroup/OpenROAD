@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-3-Clause
-// Copyright (c) 2019-2025, The OpenROAD Authors
+// Copyright (c) 2019-2026, The OpenROAD Authors
 
 #include "rmp/Restructure.h"
 
@@ -11,7 +11,6 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
 #include <limits>
 #include <set>
 #include <sstream>
@@ -20,24 +19,26 @@
 #include <utility>
 #include <vector>
 
+// Establish abc namespace, must include before abcapis.h
+#include "misc/util/abc_namespaces.h"  // IWYU pragma: keep
+
+// other includes
 #include "annealing_strategy.h"
-#include "base/abc/abc.h"
 #include "base/main/abcapis.h"
 #include "cut/abc_init.h"
-#include "cut/abc_library_factory.h"
 #include "cut/blif.h"
 #include "db_sta/dbSta.hh"
+#include "genetic_strategy.h"
 #include "odb/db.h"
 #include "rsz/Resizer.hh"
 #include "sta/Delay.hh"
 #include "sta/Graph.hh"
+#include "sta/GraphClass.hh"
 #include "sta/Liberty.hh"
 #include "sta/NetworkClass.hh"
 #include "sta/Path.hh"
 #include "sta/PathEnd.hh"
 #include "sta/PathExpanded.hh"
-#include "sta/PatternMatch.hh"
-#include "sta/PortDirection.hh"
 #include "sta/Sdc.hh"
 #include "sta/Search.hh"
 #include "sta/Sta.hh"
@@ -100,6 +101,22 @@ void Restructure::resynthAnnealing(sta::Scene* corner)
                                        annealing_revert_after_,
                                        annealing_init_ops_);
   annealing_strategy.OptimizeDesign(
+      open_sta_, name_generator_, resizer_, logger_);
+}
+
+void Restructure::resynthGenetic(sta::Scene* corner)
+{
+  GeneticStrategy genetic_strategy(corner,
+                                   slack_threshold_,
+                                   genetic_seed_,
+                                   genetic_population_size_,
+                                   genetic_mutation_probability_,
+                                   genetic_crossover_probability_,
+                                   genetic_tournament_size_,
+                                   genetic_tournament_probability_,
+                                   genetic_iters_,
+                                   genetic_init_ops_);
+  genetic_strategy.OptimizeDesign(
       open_sta_, name_generator_, resizer_, logger_);
 }
 
@@ -179,10 +196,10 @@ void Restructure::runABC()
              "Constants before remap {}",
              countConsts(block_));
 
-  Blif blif_(
+  Blif blif(
       logger_, open_sta_, locell_, loport_, hicell_, hiport_, ++blif_call_id_);
-  blif_.setReplaceableInstances(path_insts_);
-  blif_.writeBlif(input_blif_file_name_.c_str(), !is_area_mode_);
+  blif.setReplaceableInstances(path_insts_);
+  blif.writeBlif(input_blif_file_name_.c_str(), !is_area_mode_);
   debugPrint(
       logger_, RMP, "remap", 1, "Writing blif file {}", input_blif_file_name_);
   files_to_remove.emplace_back(input_blif_file_name_);
@@ -193,10 +210,10 @@ void Restructure::runABC()
 
   if (is_area_mode_) {
     // Area Mode
-    modes = {Mode::AREA_1, Mode::AREA_2, Mode::AREA_3};
+    modes = {Mode::kArea1, Mode::kArea2, Mode::kArea3};
   } else {
     // Delay Mode
-    modes = {Mode::DELAY_1, Mode::DELAY_2, Mode::DELAY_3, Mode::DELAY_4};
+    modes = {Mode::kDelay1, Mode::kDelay2, Mode::kDelay3, Mode::kDelay4};
   }
 
   child_proc.resize(modes.size(), 0);
@@ -261,8 +278,7 @@ void Restructure::runABC()
     int num_instances = 0;
     bool success = readAbcLog(abc_log_name, level_gain, delay);
     if (success) {
-      success
-          = blif_.inspectBlif(output_blif_file_name_.c_str(), num_instances);
+      success = blif.inspectBlif(output_blif_file_name_.c_str(), num_instances);
       logger_->report(
           "Optimized to {} instances in iteration {} with max path depth "
           "decrease of {}, delay of {}.",
@@ -280,7 +296,7 @@ void Restructure::runABC()
         } else {
           // Using only DELAY_4 for delay based gain since other modes not
           // showing good gains
-          if (modes[curr_mode_idx] == Mode::DELAY_4) {
+          if (modes[curr_mode_idx] == Mode::kDelay4) {
             best_delay_gain = delay;
             best_blif = output_blif_file_name_;
           }
@@ -294,7 +310,7 @@ void Restructure::runABC()
       || best_delay_gain < std::numeric_limits<float>::max()) {
     // read back netlist
     debugPrint(logger_, RMP, "remap", 1, "Reading blif file {}.", best_blif);
-    blif_.readBlif(best_blif.c_str(), block_);
+    blif.readBlif(best_blif.c_str(), block_);
     debugPrint(logger_,
                utl::RMP,
                "remap",
@@ -329,10 +345,19 @@ void Restructure::getEndPoints(sta::PinSet& ends,
   sta::VertexSet& end_points = sta_state->endpoints();
   std::size_t path_found = end_points.size();
   logger_->report("Number of paths for restructure are {}", path_found);
+  if (!is_area_mode_) {
+    // vertexWorstSlackPath reads back worst-slack paths, which only exist
+    // after an arrival/required search; searchPreamble computes delays only.
+    open_sta_->worstSlack(sta::MinMax::max());
+  }
   for (auto& end_point : end_points) {
     if (!is_area_mode_) {
       sta::Path* path
           = open_sta_->vertexWorstSlackPath(end_point, sta::MinMax::max());
+      if (path == nullptr) {
+        // Unconstrained endpoints have no worst-slack path.
+        continue;
+      }
       sta::PathExpanded expanded(path, open_sta_);
       // Members in expanded include gate output and net so divide by 2
       logger_->report("Found path of depth {}", expanded.size() / 2);
@@ -360,10 +385,10 @@ void Restructure::getEndPoints(sta::PinSet& ends,
     if (!errors.empty() && errors[0]->size() > 1) {
       sta::CheckError* error = errors[0];
       bool first = true;
-      for (auto pinName : *error) {
-        debugPrint(logger_, RMP, "remap", 1, "Unconstrained pin: {}", pinName);
-        if (!first && open_sta_->getDbNetwork()->findPin(pinName)) {
-          ends.insert(open_sta_->getDbNetwork()->findPin(pinName));
+      for (auto pin_name : *error) {
+        debugPrint(logger_, RMP, "remap", 1, "Unconstrained pin: {}", pin_name);
+        if (!first && open_sta_->getDbNetwork()->findPin(pin_name.c_str())) {
+          ends.insert(open_sta_->getDbNetwork()->findPin(pin_name.c_str()));
         }
         first = false;
       }
@@ -371,10 +396,10 @@ void Restructure::getEndPoints(sta::PinSet& ends,
     if (errors.size() > 1 && errors[1]->size() > 1) {
       sta::CheckError* error = errors[1];
       bool first = true;
-      for (auto pinName : *error) {
-        debugPrint(logger_, RMP, "remap", 1, "Unclocked pin: {}", pinName);
-        if (!first && open_sta_->getDbNetwork()->findPin(pinName)) {
-          ends.insert(open_sta_->getDbNetwork()->findPin(pinName));
+      for (auto pin_name : *error) {
+        debugPrint(logger_, RMP, "remap", 1, "Unclocked pin: {}", pin_name);
+        if (!first && open_sta_->getDbNetwork()->findPin(pin_name.c_str())) {
+          ends.insert(open_sta_->getDbNetwork()->findPin(pin_name.c_str()));
         }
         first = false;
       }
@@ -426,7 +451,7 @@ void Restructure::removeConstCells()
 
   open_sta_->clearLogicConstants();
   open_sta_->findLogicConstants();
-  std::set<odb::dbInst*> constInsts;
+  odb::PtrSet<odb::dbInst> const_insts;
   int const_cnt = 1;
   for (auto inst : block_->getInsts()) {
     int outputs = 0;
@@ -434,7 +459,7 @@ void Restructure::removeConstCells()
     auto master = inst->getMaster();
     sta::LibertyCell* cell = open_sta_->getDbNetwork()->libertyCell(
         open_sta_->getDbNetwork()->dbToSta(master));
-    if (cell->hasSequentials()) {
+    if (cell->isSequential()) {
       continue;
     }
 
@@ -449,16 +474,16 @@ void Restructure::removeConstCells()
       }
       outputs++;
       auto pin = open_sta_->getDbNetwork()->dbToSta(iterm);
-      sta::LogicValue pinVal
+      sta::LogicValue pin_val
           = open_sta_->simLogicValue(pin, open_sta_->cmdMode());
-      if (pinVal == sta::LogicValue::one || pinVal == sta::LogicValue::zero) {
+      if (pin_val == sta::LogicValue::one || pin_val == sta::LogicValue::zero) {
         odb::dbNet* net = iterm->getNet();
         if (net) {
-          odb::dbMaster* const_master = (pinVal == sta::LogicValue::one)
+          odb::dbMaster* const_master = (pin_val == sta::LogicValue::one)
                                             ? hicell_master
                                             : locell_master;
           odb::dbMTerm* const_port
-              = (pinVal == sta::LogicValue::one) ? hiterm : loterm;
+              = (pin_val == sta::LogicValue::one) ? hiterm : loterm;
           std::string inst_name = "rmp_const_" + std::to_string(const_cnt);
           debugPrint(logger_,
                      RMP,
@@ -482,19 +507,19 @@ void Restructure::removeConstCells()
       }
     }
     if (outputs > 0 && outputs == const_outputs) {
-      constInsts.insert(inst);
+      const_insts.insert(inst);
     }
   }
   open_sta_->clearLogicConstants();
 
   debugPrint(
-      logger_, RMP, "remap", 2, "Removing {} instances...", constInsts.size());
+      logger_, RMP, "remap", 2, "Removing {} instances...", const_insts.size());
 
-  for (auto inst : constInsts) {
+  for (auto inst : const_insts) {
     removeConstCell(inst);
   }
   logger_->report("Removed {} instances with constant outputs.",
-                  constInsts.size());
+                  const_insts.size());
 }
 
 void Restructure::removeConstCell(odb::dbInst* inst)
@@ -559,19 +584,19 @@ void Restructure::writeOptCommands(std::ofstream& script)
   script << choice << '\n';
   script << choice2 << '\n';
 
-  if (opt_mode_ == Mode::AREA_3) {
+  if (opt_mode_ == Mode::kArea3) {
     script << "choice2\n";  // << "scleanup" << std::endl;
   } else {
     script << "resyn2\n";  // << "scleanup" << std::endl;
   }
 
   switch (opt_mode_) {
-    case Mode::DELAY_1: {
+    case Mode::kDelay1: {
       script << "map -D 0.01 -A 0.9 -B 0.2 -M 0 -p\n";
       script << "buffer -p -c\n";
       break;
     }
-    case Mode::DELAY_2: {
+    case Mode::kDelay2: {
       script << "choice\n";
       script << "map -D 0.01 -A 0.9 -B 0.2 -M 0 -p\n";
       script << "choice\n";
@@ -580,7 +605,7 @@ void Restructure::writeOptCommands(std::ofstream& script)
              << "topo\n";
       break;
     }
-    case Mode::DELAY_3: {
+    case Mode::kDelay3: {
       script << "choice2\n";
       script << "map -D 0.01 -A 0.9 -B 0.2 -M 0 -p\n";
       script << "choice2\n";
@@ -589,7 +614,7 @@ void Restructure::writeOptCommands(std::ofstream& script)
              << "topo\n";
       break;
     }
-    case Mode::DELAY_4: {
+    case Mode::kDelay4: {
       script << "choice2\n";
       script << "amap -F 20 -A 20 -C 5000 -Q 0.1 -m\n";
       script << "choice2\n";
@@ -597,15 +622,15 @@ void Restructure::writeOptCommands(std::ofstream& script)
       script << "buffer -p -c\n";
       break;
     }
-    case Mode::AREA_2:
-    case Mode::AREA_3: {
+    case Mode::kArea2:
+    case Mode::kArea3: {
       script << "choice2\n";
       script << "amap -m -Q 0.1 -F 20 -A 20 -C 5000\n";
       script << "choice2\n";
       script << "amap -m -Q 0.1 -F 20 -A 20 -C 5000\n";
       break;
     }
-    case Mode::AREA_1:
+    case Mode::kArea1:
     default: {
       script << "choice2\n";
       script << "amap -m -Q 0.1 -F 20 -A 20 -C 5000\n";
@@ -620,27 +645,27 @@ void Restructure::setMode(const char* mode_name)
 
   if (!strcmp(mode_name, "timing")) {
     is_area_mode_ = false;
-    opt_mode_ = Mode::DELAY_1;
+    opt_mode_ = Mode::kDelay1;
   } else if (!strcmp(mode_name, "area")) {
-    opt_mode_ = Mode::AREA_1;
+    opt_mode_ = Mode::kArea1;
   } else {
     logger_->warn(RMP, 10, "Mode {} not recognized.", mode_name);
   }
 }
 
-void Restructure::setTieHiPort(sta::LibertyPort* tieHiPort)
+void Restructure::setTieHiPort(sta::LibertyPort* tie_hi_port)
 {
-  if (tieHiPort) {
-    hicell_ = tieHiPort->libertyCell()->name();
-    hiport_ = tieHiPort->name();
+  if (tie_hi_port) {
+    hicell_ = tie_hi_port->libertyCell()->name();
+    hiport_ = tie_hi_port->name();
   }
 }
 
-void Restructure::setTieLoPort(sta::LibertyPort* tieLoPort)
+void Restructure::setTieLoPort(sta::LibertyPort* tie_lo_port)
 {
-  if (tieLoPort) {
-    locell_ = tieLoPort->libertyCell()->name();
-    loport_ = tieLoPort->name();
+  if (tie_lo_port) {
+    locell_ = tie_lo_port->libertyCell()->name();
+    loport_ = tie_lo_port->name();
   }
 }
 

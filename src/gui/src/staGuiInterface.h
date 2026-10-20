@@ -14,6 +14,7 @@
 #include "db_sta/dbNetwork.hh"
 #include "db_sta/dbSta.hh"
 #include "gui/gui.h"
+#include "odb/PtrSetMap.h"
 #include "odb/db.h"
 #include "odb/dbBlockCallBackObj.h"
 #include "odb/dbObject.h"
@@ -154,9 +155,9 @@ class TimingPath
 
   TimingPath();
 
-  void setStartClock(const char* name) { start_clk_ = name; }
+  void setStartClock(const std::string& name) { start_clk_ = name; }
   const std::string& getStartClock() const { return start_clk_; }
-  void setEndClock(const char* name) { end_clk_ = name; }
+  void setEndClock(const std::string& name) { end_clk_ = name; }
   const std::string& getEndClock() const { return end_clk_; }
 
   float getPathArrivalTime() const { return arr_time_; }
@@ -279,7 +280,7 @@ class ClockTree
   sta::Delay getMinimumDriverDelay(bool visibility) const;
   int getSinkCount() const;
 
-  std::set<odb::dbNet*> getNets(bool visibility) const;
+  odb::PtrSet<odb::dbNet> getNets(bool visibility) const;
 
   void addPath(sta::PathExpanded& path, const sta::StaState* sta);
 
@@ -326,7 +327,11 @@ class STAGuiInterface
  public:
   STAGuiInterface(sta::dbSta* sta = nullptr);
 
-  void setSTA(sta::dbSta* sta) { sta_ = sta; }
+  void setSTA(sta::dbSta* sta)
+  {
+    sta_ = sta;
+    scene_ = sta->cmdScene();
+  }
   sta::dbSta* getSTA() const { return sta_; }
 
   sta::dbNetwork* getNetwork() const { return sta_->getDbNetwork(); }
@@ -352,6 +357,12 @@ class STAGuiInterface
   void setIncludeUnconstrainedPaths(bool value)
   {
     include_unconstrained_ = value;
+  }
+
+  bool isIncludeClkGatingChecks() const { return include_clk_gating_checks_; }
+  void setIncludeClkGatingChecks(bool value)
+  {
+    include_clk_gating_checks_ = value;
   }
 
   bool isOnePathPerEndpoint() const { return one_path_per_endpoint_; }
@@ -398,6 +409,9 @@ class STAGuiInterface
 
   bool include_unconstrained_;
   bool include_capture_path_;
+  // Clock gating checks are included by default so that the reported worst
+  // slack matches the worst_slack/report_worst_slack_metric commands.
+  bool include_clk_gating_checks_;
 
   ConeDepthMapPinSet getCone(const sta::Pin* pin,
                              sta::PinSet pin_set,

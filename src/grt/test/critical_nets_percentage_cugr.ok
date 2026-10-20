@@ -20,24 +20,51 @@
 [INFO GRT-0019] Found 6 clock nets.
 [INFO GRT-0001] Minimum degree: 2
 [INFO GRT-0002] Maximum degree: 36
-design statistics
-lib DBU:             1000
-die region (in DBU): [x: (0, 299960), y: (0, 300130)]
-num of nets :        348
-num of special nets: 0
-gcell grid:          41 x 41 x 6
-stage 1: pattern routing
-291 / 348 nets have overflow.
-stage 2: pattern routing with possible detours
-295 / 348 nets have overflow.
-stage 3: maze routing on sparsified routing graph
-289 / 348 nets have overflow.
-routing statistics
-wire length (metric):  45108
-total via count:       2665
-total wire overflow:   258
-min resource: -3.7638890080981797
-bottleneck:   (3, 16, 26)
-[INFO GRT-0018] Total wirelength: 23608 um
+Design statistics
+Nets:                348
+Special nets:        0
+Routing layers:      6
+
+[INFO GRT-0053] Routing resources analysis:
+          Routing      Original      Derated      Resource
+Layer     Direction    Resources     Resources    Reduction (%)
+---------------------------------------------------------------
+li1        Vertical            0             0          0.00%
+met1       Horizontal      30634          6127          80.00%
+met2       Vertical        25000          5000          80.00%
+met3       Horizontal      16240          3248          80.00%
+met4       Vertical        12480          2496          80.00%
+met5       Horizontal       3600          1640          54.44%
+---------------------------------------------------------------
+
+Stage 1: Pattern routing.
+Stage 3: Pattern routing with detours.
+Stage 4: Maze routing on sparsified graph.
+Stage 5: Iterative rip-up and re-route.
+[INFO GRT-0117] Start extra iteration 1/5
+[INFO GRT-0117] Start extra iteration 2/5
+[INFO GRT-0117] Start extra iteration 3/5
+[INFO GRT-0117] Start extra iteration 4/5
+[INFO GRT-0117] Start extra iteration 5/5
+[WARNING GRT-0118] Iterative RRR finished with congestion remaining (14).
+Routing statistics
+Wire length:           47366
+Total via count:       2195
+Total congestion:      14.41
+Min resource:          -0.62
+Bottleneck:            (1, 30, 10)
+[INFO GRT-0130] CUGR congestion report:
+Layer   Dir     Resource     Wire Dmd      Via Dmd    Total Dmd  Usage (%)   Wire Ovf    Via Ovf  Max Edge Ovf
+--------------------------------------------------------------------------------------------------------------
+li1       V         0.00         0.00         0.00         0.00       0.00       0.00       0.00          0.00
+met1      H      6126.71      1107.00       102.35      1209.35      19.74       7.77       1.19          0.62
+met2      V      5000.00       939.00        87.80      1026.80      20.54       0.93       0.13          0.56
+met3      H      3248.00       267.00        34.89       301.89       9.29       3.99       0.40          0.30
+met4      V      2496.00       113.00         5.09       118.09       4.73       0.00       0.00          0.00
+met5      H      1640.00         0.00         0.00         0.00       0.00       0.00       0.00          0.00
+--------------------------------------------------------------------------------------------------------------
+Total           18510.71      2426.00       230.13      2656.13      14.35      12.69       1.71          0.62
+[INFO GRT-0018] Total wirelength: 24588 um
 [INFO GRT-0014] Routed nets: 348
+[WARNING GRT-0115] Global routing finished with congestion. Check the congestion regions in the DRC Viewer.
 No differences found.

@@ -9,6 +9,7 @@ sta::define_cmd_args "rtl_macro_placer" { -max_num_macro  max_num_macro \
                                           -max_num_level  max_num_level \
                                           -coarsening_ratio coarsening_ratio \
                                           -large_net_threshold large_net_threshold \
+                                          -min_channel_size min_channel_size \
                                           -halo_width halo_width \
                                           -halo_height halo_height \
                                           -fence_lx   fence_lx \
@@ -23,25 +24,29 @@ sta::define_cmd_args "rtl_macro_placer" { -max_num_macro  max_num_macro \
                                           -boundary_weight boundary_weight \
                                           -notch_weight notch_weight \
                                           -macro_blockage_weight macro_blockage_weight \
+                                          -soft_blockage_weight soft_blockage_weight \
                                           -target_util   target_util \
                                           -min_ar  min_ar \
                                           -report_directory report_directory \
                                           -write_macro_placement file_name \
                                           -keep_clustering_data \
+                                          -pin_aware_channels \
                                         }
 proc rtl_macro_placer { args } {
   sta::parse_key_args "rtl_macro_placer" args \
-    keys {-max_num_macro  -min_num_macro -max_num_inst  -min_num_inst  -tolerance   \
-         -max_num_level  -coarsening_ratio -large_net_threshold \
+    keys {-max_num_macro -min_num_macro -max_num_inst -min_num_inst -tolerance \
+         -max_num_level -coarsening_ratio -large_net_threshold \
+         -min_channel_size \
          -halo_width -halo_height \
-         -fence_lx   -fence_ly  -fence_ux   -fence_uy  \
-         -area_weight  -outline_weight -wirelength_weight -guidance_weight -fence_weight \
+         -fence_lx -fence_ly -fence_ux -fence_uy \
+         -area_weight -outline_weight -wirelength_weight -guidance_weight -fence_weight \
          -boundary_weight -notch_weight \
-         -macro_blockage_weight -target_util \
+         -macro_blockage_weight \
+         -soft_blockage_weight -target_util \
          -min_ar \
          -report_directory \
          -write_macro_placement } \
-    flags {-keep_clustering_data}
+    flags {-keep_clustering_data -pin_aware_channels}
 
   sta::check_argc_eq0 "rtl_macro_placer" $args
 
@@ -61,8 +66,6 @@ proc rtl_macro_placer { args } {
   set max_num_level 2
   set coarsening_ratio 10.0
   set large_net_threshold 50
-  set halo_width 0.0
-  set halo_height 0.0
   set fence_lx 0.0
   set fence_ly 0.0
   set fence_ux 0.0
@@ -75,7 +78,7 @@ proc rtl_macro_placer { args } {
   set fence_weight 10.0
   set boundary_weight 50.0
   set notch_weight 50.0
-  set macro_blockage_weight 10.0
+  set soft_blockage_weight 10.0
   set target_util 0.25
   set min_ar 0.33
   set report_directory "hier_rtlmp"
@@ -107,15 +110,50 @@ proc rtl_macro_placer { args } {
     set large_net_threshold $keys(-large_net_threshold)
   }
 
-  if { [info exists keys(-halo_width)] && [info exists keys(-halo_height)] } {
-    set halo_width $keys(-halo_width)
-    set halo_height $keys(-halo_height)
-  } elseif { [info exists keys(-halo_width)] } {
-    set halo_width $keys(-halo_width)
-    set halo_height $keys(-halo_width)
-  } elseif { [info exists keys(-halo_height)] } {
-    set halo_width $keys(-halo_height)
-    set halo_height $keys(-halo_height)
+  if { [info exists keys(-halo_width)] || [info exists keys(-halo_height)] } {
+    utl::warn MPL 74 "-halo_width/-halo_height are deprecated, use\
+                      -min_channel_size instead."
+    set halo_width 0.0
+    set halo_height 0.0
+
+    if { [info exists keys(-halo_width)] } {
+      set halo_width $keys(-halo_width)
+      set halo_height $halo_width
+    }
+
+    if { [info exists keys(-halo_height)] } {
+      set halo_height $keys(-halo_height)
+      if { ![info exists keys(-halo_width)] } {
+        set halo_width $halo_height
+      }
+    }
+
+    mpl::set_min_channel [expr { 2 * $halo_width }] [expr { 2 * $halo_height }]
+  }
+
+  if { [info exists keys(-min_channel_size)] } {
+    set min_channel_size $keys(-min_channel_size)
+    set length [llength $min_channel_size]
+
+    if { $length != 1 && $length != 2 } {
+      utl::error MPL 80 "-min_channel_size must have 1 or 2 values."
+    }
+
+    if { $length == 1 } {
+      set min_channel_width [lindex $min_channel_size 0]
+      set min_channel_height $min_channel_width
+    } else {
+      lassign $min_channel_size min_channel_width min_channel_height
+    }
+
+    mpl::set_min_channel $min_channel_width $min_channel_height
+  }
+
+  if {
+    [info exists flags(-pin_aware_channels)]
+    && ![info exists keys(-min_channel_size)]
+  } {
+    utl::error MPL 79 "-pin_aware_channels requires -min_channel_size to be set."
   }
 
   if { [info exists keys(-fence_lx)] } {
@@ -152,7 +190,17 @@ proc rtl_macro_placer { args } {
     set notch_weight $keys(-notch_weight)
   }
   if { [info exists keys(-macro_blockage_weight)] } {
-    set macro_blockage_weight $keys(-macro_blockage_weight)
+    if { [info exists keys(-soft_blockage_weight)] } {
+      utl::error MPL 69 "Cannot set -macro_blockage_weight along with\
+                         -soft_blockage_weight. Use only one of those keys."
+    }
+
+    utl::warn MPL 70 "-macro_blockage_weight is deprecated, use\
+                      -soft_blockage_weight instead."
+    set soft_blockage_weight $keys(-macro_blockage_weight)
+  }
+  if { [info exists keys(-soft_blockage_weight)] } {
+    set soft_blockage_weight $keys(-soft_blockage_weight)
   }
   if { [info exists keys(-target_util)] } {
     set target_util $keys(-target_util)
@@ -179,16 +227,15 @@ proc rtl_macro_placer { args } {
       $max_num_level \
       $coarsening_ratio \
       $large_net_threshold \
-      $halo_width \
-      $halo_height \
       $fence_lx $fence_ly $fence_ux $fence_uy \
       $area_weight $outline_weight $wirelength_weight \
       $guidance_weight $fence_weight $boundary_weight \
-      $notch_weight $macro_blockage_weight \
+      $notch_weight $soft_blockage_weight \
       $target_util \
       $min_ar \
       $report_directory \
-      [info exists flags(-keep_clustering_data)]]
+      [info exists flags(-keep_clustering_data)] \
+      [info exists flags(-pin_aware_channels)]]
   } {
     return false
   }
@@ -280,40 +327,61 @@ proc set_macro_guidance_region { args } {
   mpl::add_guidance_region $macro $x1 $y1 $x2 $y2
 }
 
-sta::define_cmd_args "set_macro_halo" { -macro_name macro_name \
-                                        -halo halo }
-proc set_macro_halo { args } {
-  sta::parse_key_args "set_macro_halo" args \
-    keys { -macro_name -halo } flags {}
+sta::define_cmd_args "set_macro_base_halo" { halo }
+proc set_macro_base_halo { args } {
+  utl::warn MPL 75 "set_macro_base_halo is deprecated, use\
+                  -min_channel_size instead."
+  sta::parse_key_args "set_macro_base_halo" args \
+    keys {} flags {}
 
-  sta::check_argc_eq0 "set_macro_halo" $args
+  lassign [mpl::parse_halo $args] left bottom right top
+  set width [expr { $left + $right }]
+  set height [expr { $bottom + $top }]
 
-  if { [info exists keys(-macro_name)] } {
-    set macro_name $keys(-macro_name)
-  } else {
-    utl::error MPL 48 "-macro_name is required."
+  mpl::set_min_channel $width $height
+}
+
+sta::define_cmd_args "block_macro_channels" {}
+proc block_macro_channels { args } {
+  sta::parse_key_args "block_macro_channels" args \
+    keys {} flags {}
+
+  sta::check_argc_eq0 "block_macro_channels" $args
+
+  if { [ord::get_db_block] == "NULL" } {
+    utl::error MPL 77 "Could not block macro channels. No block found."
   }
 
-  set macro [mpl::parse_macro_name "set_macro_halo" $macro_name]
-
-  if { [info exists keys(-halo)] } {
-    set halo $keys(-halo)
-  } else {
-    utl::error MPL 38 "-halo is required."
-  }
-
-  if { [llength $halo] != 2 } {
-    utl::error MPL 54 "-halo must be a list of 2 values."
-  }
-
-  lassign $halo width height
-  set width $width
-  set height $height
-
-  mpl::set_macro_halo $macro $width $height
+  mpl::block_macro_channels
 }
 
 namespace eval mpl {
+proc parse_halo { halo } {
+  set length [llength $halo]
+
+  if { $length != 2 && $length != 4 } {
+    utl::error MPL 72 "Halo must have 2 or 4 values."
+  }
+
+  if { $length == 2 } {
+    lassign $halo left bottom
+    set right $left
+    set top $bottom
+  }
+
+  if { $length == 4 } {
+    lassign $halo left bottom right top
+  }
+
+  foreach value [list $left $bottom $right $top] {
+    if { $value < 0 } {
+      utl::error MPL 73 "Halo values must be non-negative."
+    }
+  }
+
+  return [list $left $bottom $right $top]
+}
+
 proc parse_macro_name { cmd macro_name } {
   set block [ord::get_db_block]
   set inst [$block findInst "$macro_name"]

@@ -54,22 +54,17 @@ set_routing_alpha
 
 There are a set of regression tests in `./test`. For more information, refer to this [section](../../README.md#regression-tests). 
 
-Simply run the following script: 
+Simply run the following command:
 
 ```shell
-./test/regression
+bazelisk test //src/stt/...
 ```
 
 ## Limitations
-
-## FAQs
-
-Check out [GitHub discussion](https://github.com/The-OpenROAD-Project/OpenROAD/discussions/categories/q-a?discussions_q=category%3AQ%26A+stt+in%3Atitle)
-about this tool.
 
 ## References
 
 ## License
 
-BSD 3-Clause License. See [LICENSE](LICENSE) file.
+BSD 3-Clause License. See [LICENSE](../../LICENSE) file.
 

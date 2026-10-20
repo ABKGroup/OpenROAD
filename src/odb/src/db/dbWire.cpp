@@ -32,6 +32,10 @@ bool _dbWire::operator==(const _dbWire& rhs) const
     return false;
   }
 
+  if (flags_.ordered != rhs.flags_.ordered) {
+    return false;
+  }
+
   if (data_ != rhs.data_) {
     return false;
   }
@@ -100,6 +104,18 @@ bool dbWire::isGlobalWire()
   return wire->flags_.is_global == 1;
 }
 
+bool dbWire::isOrdered()
+{
+  _dbWire* wire = (_dbWire*) this;
+  return wire->flags_.ordered == 1;
+}
+
+void dbWire::setOrdered(bool ordered)
+{
+  _dbWire* wire = (_dbWire*) this;
+  wire->flags_.ordered = ordered ? 1 : 0;
+}
+
 void dbWire::addOneSeg(unsigned char op,
                        int value,
                        uint32_t jj,
@@ -124,32 +140,52 @@ void dbWire::addOneSeg(unsigned char op, int value)
   wire->opcodes_.push_back(op);
 }
 
-uint32_t dbWire::getTermJid(const int termid) const
+uint32_t dbWire::getTermShapeJunctionId(const int term_id) const
 {
   _dbWire* wire = (_dbWire*) this;
-  int topcd = kIterm;
-  int ttid = termid;
-  if (termid < 0) {
-    topcd = kBterm;
-    ttid = -termid;
+  int target_op_code = kIterm;
+  int target_term_id = term_id;
+
+  if (term_id < 0) {
+    target_op_code = kBterm;
+    target_term_id = -term_id;
   }
-  const uint32_t wlen = wire->length();
-  uint32_t jj;
-  for (jj = 0; jj < wlen; jj++) {
-    if ((wire->opcodes_[jj] & WOP_OPCODE_MASK) == topcd) {
-      if (wire->data_[jj] == ttid) {
+
+  const uint32_t number_of_junctions = wire->length();
+
+  uint32_t junction_id;
+  for (junction_id = 0; junction_id < number_of_junctions; junction_id++) {
+    const WireOp junction_op_code
+        = static_cast<WireOp>(wire->opcodes_[junction_id] & WOP_OPCODE_MASK);
+
+    if (junction_op_code == target_op_code) {
+      if (wire->data_[junction_id] == target_term_id) {
         break;
       }
     }
   }
-  if (jj == wlen) {
+
+  if (junction_id == number_of_junctions) {
     return 0;
   }
-  jj--;
-  if ((wire->opcodes_[jj] & WOP_OPCODE_MASK) == kProperty) {
-    jj--;
+
+  // It may exist junctions for annotations after the junction of the
+  // wire shape connected to the terminal, so we need to walk backwards
+  // and look for it.
+  while (junction_id > 0) {
+    const WireOp junction_op_code
+        = static_cast<WireOp>(wire->opcodes_[junction_id] & WOP_OPCODE_MASK);
+
+    if (junction_op_code == kX || junction_op_code == kY
+        || junction_op_code == kColinear || junction_op_code == kVia
+        || junction_op_code == kTechVia || junction_op_code == kRect) {
+      break;
+    }
+
+    --junction_id;
   }
-  return jj;
+
+  return junction_id;
 }
 
 std::optional<Rect> dbWire::getBBox()
@@ -367,53 +403,50 @@ enum Coord
   None = 2
 };
 
-static const int nextState[13][3] = {
-    /*            X   Y   C */
-    /*  0  */ {1, 2, 3},
-    /*  1  */ {4, 5, 6},
-    /*  2  */ {7, 8, 9},
-    /*  3  */ {10, 11, 12},
-    /*  4  */ {4, 13, 4},
-    /*  5  */ {13, 5, 5},
-    /*  6  */ {4, 5, 6},
-    /*  7  */ {7, 13, 7},
-    /*  8  */ {13, 8, 8},
-    /*  9  */ {7, 8, 9},
-    /*  10 */ {10, 13, 10},
-    /*  11 */ {13, 11, 11},
-    /*  12 */ {10, 11, 12}};
+static const int nextState[13][3] = {/*            X   Y   C */
+                                     /*  0  */ {1, 2, 3},
+                                     /*  1  */ {4, 5, 6},
+                                     /*  2  */ {7, 8, 9},
+                                     /*  3  */ {10, 11, 12},
+                                     /*  4  */ {4, 13, 4},
+                                     /*  5  */ {13, 5, 5},
+                                     /*  6  */ {4, 5, 6},
+                                     /*  7  */ {7, 13, 7},
+                                     /*  8  */ {13, 8, 8},
+                                     /*  9  */ {7, 8, 9},
+                                     /*  10 */ {10, 13, 10},
+                                     /*  11 */ {13, 11, 11},
+                                     /*  12 */ {10, 11, 12}};
 
-static const Coord curCoord[13][3] = {
-    /*            X        Y        C */
-    /*  0  */ {None, None, None},
-    /*  1  */ {XCoord, YCoord, None},
-    /*  2  */ {XCoord, YCoord, None},
-    /*  3  */ {XCoord, YCoord, None},
-    /*  4  */ {None, YCoord, None},
-    /*  5  */ {XCoord, None, None},
-    /*  6  */ {XCoord, YCoord, None},
-    /*  7  */ {None, YCoord, None},
-    /*  8  */ {XCoord, None, None},
-    /*  9  */ {XCoord, YCoord, None},
-    /*  10 */ {None, YCoord, None},
-    /*  11 */ {XCoord, None, None},
-    /*  12 */ {XCoord, YCoord, None}};
+static const Coord curCoord[13][3] = {/*            X        Y        C */
+                                      /*  0  */ {None, None, None},
+                                      /*  1  */ {XCoord, YCoord, None},
+                                      /*  2  */ {XCoord, YCoord, None},
+                                      /*  3  */ {XCoord, YCoord, None},
+                                      /*  4  */ {None, YCoord, None},
+                                      /*  5  */ {XCoord, None, None},
+                                      /*  6  */ {XCoord, YCoord, None},
+                                      /*  7  */ {None, YCoord, None},
+                                      /*  8  */ {XCoord, None, None},
+                                      /*  9  */ {XCoord, YCoord, None},
+                                      /*  10 */ {None, YCoord, None},
+                                      /*  11 */ {XCoord, None, None},
+                                      /*  12 */ {XCoord, YCoord, None}};
 
-static const Coord prevCoord[13][3] = {
-    /*            X        Y        C */
-    /*  0  */ {XCoord, YCoord, None},
-    /*  1  */ {None, YCoord, None},
-    /*  2  */ {XCoord, None, None},
-    /*  3  */ {XCoord, YCoord, None},
-    /*  4  */ {None, YCoord, None},
-    /*  5  */ {None, None, None},
-    /*  6  */ {None, YCoord, None},
-    /*  7  */ {None, None, None},
-    /*  8  */ {XCoord, None, None},
-    /*  9  */ {XCoord, None, None},
-    /*  10 */ {None, YCoord, None},
-    /*  11 */ {XCoord, None, None},
-    /*  12 */ {XCoord, YCoord, None}};
+static const Coord prevCoord[13][3] = {/*            X        Y        C */
+                                       /*  0  */ {XCoord, YCoord, None},
+                                       /*  1  */ {None, YCoord, None},
+                                       /*  2  */ {XCoord, None, None},
+                                       /*  3  */ {XCoord, YCoord, None},
+                                       /*  4  */ {None, YCoord, None},
+                                       /*  5  */ {None, None, None},
+                                       /*  6  */ {None, YCoord, None},
+                                       /*  7  */ {None, None, None},
+                                       /*  8  */ {XCoord, None, None},
+                                       /*  9  */ {XCoord, None, None},
+                                       /*  10 */ {None, YCoord, None},
+                                       /*  11 */ {XCoord, None, None},
+                                       /*  12 */ {XCoord, YCoord, None}};
 
 void dbWire::getSegment(int shape_id, dbShape& shape)
 {
@@ -437,127 +470,127 @@ void dbWire::getSegment(int shape_id, dbShape& shape)
   bool has_cur_ext = false;
   bool ignore_ext = false;
 
-decode_loop: {
-  assert(idx >= 0);
-  opcode = wire->opcodes_[idx];
+decode_loop:
+  {
+    assert(idx >= 0);
+    opcode = wire->opcodes_[idx];
 
-  const WireOp wire_op = static_cast<WireOp>(opcode & WOP_OPCODE_MASK);
-  switch (wire_op) {
-    case kJunction:
-      idx = wire->data_[idx];
-      ignore_ext = true;
-      goto decode_loop;
+    const WireOp wire_op = static_cast<WireOp>(opcode & WOP_OPCODE_MASK);
+    switch (wire_op) {
+      case kJunction:
+        idx = wire->data_[idx];
+        ignore_ext = true;
+        goto decode_loop;
 
-    case kRule:
-      if (found_width == false) {
-        found_width = true;
+      case kRule:
+        if (!found_width) {
+          found_width = true;
 
-        if (opcode & WOP_BLOCK_RULE) {
+          if (opcode & WOP_BLOCK_RULE) {
+            dbBlock* block = (dbBlock*) wire->getOwner();
+            dbTechLayerRule* rule
+                = dbTechLayerRule::getTechLayerRule(block, wire->data_[idx]);
+            width = rule->getWidth();
+          } else {
+            dbTech* tech = getDb()->getTech();
+            dbTechLayerRule* rule
+                = dbTechLayerRule::getTechLayerRule(tech, wire->data_[idx]);
+            width = rule->getWidth();
+          }
+        }
+
+        break;
+
+      case kX:
+        input = XInput;
+        goto state_machine_update;
+
+      case kY:
+        input = YInput;
+        goto state_machine_update;
+
+      case kColinear:
+        input = CInput;
+        goto state_machine_update;
+
+      case kVia:
+        if (layer == nullptr) {
           dbBlock* block = (dbBlock*) wire->getOwner();
-          dbTechLayerRule* rule
-              = dbTechLayerRule::getTechLayerRule(block, wire->data_[idx]);
-          width = rule->getWidth();
-        } else {
+          dbVia* via = dbVia::getVia(block, wire->data_[idx]);
+
+          if (opcode & WOP_VIA_EXIT_TOP) {
+            layer = via->getTopLayer();
+          } else {
+            layer = via->getBottomLayer();
+          }
+        }
+        ignore_ext = true;
+        break;
+
+      case kTechVia:
+        if (layer == nullptr) {
           dbTech* tech = getDb()->getTech();
-          dbTechLayerRule* rule
-              = dbTechLayerRule::getTechLayerRule(tech, wire->data_[idx]);
-          width = rule->getWidth();
+          dbTechVia* via = dbTechVia::getTechVia(tech, wire->data_[idx]);
+
+          if (opcode & WOP_VIA_EXIT_TOP) {
+            layer = via->getTopLayer();
+          } else {
+            layer = via->getBottomLayer();
+          }
         }
-      }
-
-      break;
-
-    case kX:
-      input = XInput;
-      goto state_machine_update;
-
-    case kY:
-      input = YInput;
-      goto state_machine_update;
-
-    case kColinear:
-      input = CInput;
-      goto state_machine_update;
-
-    case kVia:
-      if (layer == nullptr) {
-        dbBlock* block = (dbBlock*) wire->getOwner();
-        dbVia* via = dbVia::getVia(block, wire->data_[idx]);
-
-        if (opcode & WOP_VIA_EXIT_TOP) {
-          layer = via->getTopLayer();
-        } else {
-          layer = via->getBottomLayer();
-        }
-      }
-      ignore_ext = true;
-      break;
-
-    case kTechVia:
-      if (layer == nullptr) {
-        dbTech* tech = getDb()->getTech();
-        dbTechVia* via = dbTechVia::getTechVia(tech, wire->data_[idx]);
-
-        if (opcode & WOP_VIA_EXIT_TOP) {
-          layer = via->getTopLayer();
-        } else {
-          layer = via->getBottomLayer();
-        }
-      }
-      ignore_ext = true;
-      break;
-    case kPath:
-    case kShort:
-    case kIterm:
-    case kBterm:
-    case kOperand:
-    case kProperty:
-    case kVwire:
-    case kRect:
-    case kNop:
-    case kColor:
-    case kViaColor: {
-      utl::Logger* logger = getImpl()->getLogger();
-      logger->error(
-          utl::ODB, 1115, "Unexpected {} in dbWire::getSegment", wire_op);
-      break;
-    }
-  }
-
-  --idx;
-  goto decode_loop;
-
-state_machine_update: {
-  if (state == 0) {
-    if (opcode & WOP_DEFAULT_WIDTH) {
-      found_width = true;
-      default_width = true;
+        ignore_ext = true;
+        break;
+      case kPath:
+      case kShort:
+      case kIterm:
+      case kBterm:
+      case kOperand:
+      case kProperty:
+      case kVwire:
+      case kRect:
+      case kNop:
+      case kColor:
+      case kViaColor:
+        break;
     }
 
-    if (opcode & WOP_EXTENSION) {
-      prev_ext = wire->data_[idx + 1];
-      has_prev_ext = true;
-    }
-  } else if (state <= 3) {
-    if ((opcode & WOP_EXTENSION) && !ignore_ext) {
-      cur_ext = wire->data_[idx + 1];
-      has_cur_ext = true;
-    }
-  }
-
-  int value = wire->data_[idx];
-  cur[curCoord[state][input]] = value;
-  prev[prevCoord[state][input]] = value;
-  state = nextState[state][input];
-  --idx;
-
-  if (state < 13) {
+    --idx;
     goto decode_loop;
-  }
-}
-}
 
-  while ((layer == nullptr) || (found_width == false)) {
+  state_machine_update:
+    {
+      if (state == 0) {
+        if (opcode & WOP_DEFAULT_WIDTH) {
+          found_width = true;
+          default_width = true;
+        }
+
+        if (opcode & WOP_EXTENSION) {
+          prev_ext = wire->data_[idx + 1];
+          has_prev_ext = true;
+        }
+      } else if (state <= 3) {
+        if ((opcode & WOP_EXTENSION) && !ignore_ext) {
+          const WireOp wire_op = static_cast<WireOp>(opcode & WOP_OPCODE_MASK);
+          cur_ext
+              = wire_op == kColinear ? wire->data_[idx] : wire->data_[idx + 1];
+          has_cur_ext = true;
+        }
+      }
+
+      int value = wire->data_[idx];
+      cur[curCoord[state][input]] = value;
+      prev[prevCoord[state][input]] = value;
+      state = nextState[state][input];
+      --idx;
+
+      if (state < 13) {
+        goto decode_loop;
+      }
+    }
+  }
+
+  while ((layer == nullptr) || (!found_width)) {
     assert(idx >= 0);
     opcode = wire->opcodes_[idx];
 
@@ -692,102 +725,106 @@ void dbWire::getSegment(int shape_id, dbTechLayer* layer, dbShape& shape)
   bool has_cur_ext = false;
   bool ignore_ext = false;
 
-decode_loop: {
-  assert(idx >= 0);
-  opcode = wire->opcodes_[idx];
+decode_loop:
+  {
+    assert(idx >= 0);
+    opcode = wire->opcodes_[idx];
 
-  const WireOp wire_op = static_cast<WireOp>(opcode & WOP_OPCODE_MASK);
-  switch (wire_op) {
-    case kJunction:
-      idx = wire->data_[idx];
-      ignore_ext = true;
-      goto decode_loop;
+    const WireOp wire_op = static_cast<WireOp>(opcode & WOP_OPCODE_MASK);
+    switch (wire_op) {
+      case kJunction:
+        idx = wire->data_[idx];
+        ignore_ext = true;
+        goto decode_loop;
 
-    case kRule:
-      if (found_width == false) {
-        found_width = true;
+      case kRule:
+        if (!found_width) {
+          found_width = true;
 
-        if (opcode & WOP_BLOCK_RULE) {
-          dbBlock* block = (dbBlock*) wire->getOwner();
-          dbTechLayerRule* rule
-              = dbTechLayerRule::getTechLayerRule(block, wire->data_[idx]);
-          width = rule->getWidth();
-        } else {
-          dbTech* tech = getDb()->getTech();
-          dbTechLayerRule* rule
-              = dbTechLayerRule::getTechLayerRule(tech, wire->data_[idx]);
-          width = rule->getWidth();
+          if (opcode & WOP_BLOCK_RULE) {
+            dbBlock* block = (dbBlock*) wire->getOwner();
+            dbTechLayerRule* rule
+                = dbTechLayerRule::getTechLayerRule(block, wire->data_[idx]);
+            width = rule->getWidth();
+          } else {
+            dbTech* tech = getDb()->getTech();
+            dbTechLayerRule* rule
+                = dbTechLayerRule::getTechLayerRule(tech, wire->data_[idx]);
+            width = rule->getWidth();
+          }
+        }
+
+        break;
+
+      case kX:
+        input = XInput;
+        goto state_machine_update;
+
+      case kY:
+        input = YInput;
+        goto state_machine_update;
+
+      case kColinear:
+        input = CInput;
+        goto state_machine_update;
+
+      case kPath:
+      case kShort:
+      case kVia:
+      case kTechVia:
+      case kIterm:
+      case kBterm:
+      case kOperand:
+      case kProperty:
+      case kVwire:
+      case kRect:
+      case kNop:
+      case kColor:
+      case kViaColor: {
+        utl::Logger* logger = getImpl()->getLogger();
+        logger->error(
+            utl::ODB, 1114, "Unexpected {} in dbWire::getSegment", wire_op);
+        break;
+      }
+    }
+
+    --idx;
+    goto decode_loop;
+
+  state_machine_update:
+    {
+      if (state == 0) {
+        if (opcode & WOP_DEFAULT_WIDTH) {
+          found_width = true;
+          default_width = true;
+        }
+
+        if (opcode & WOP_EXTENSION) {
+          prev_ext = wire->data_[idx + 1];
+          has_prev_ext = true;
+        }
+      } else if (state <= 3) {
+        if ((opcode & WOP_EXTENSION) && !ignore_ext) {
+          const WireOp wire_op = static_cast<WireOp>(opcode & WOP_OPCODE_MASK);
+          cur_ext
+              = wire_op == kColinear ? wire->data_[idx] : wire->data_[idx + 1];
+          has_cur_ext = true;
         }
       }
 
-      break;
+      int value = wire->data_[idx];
+      cur[curCoord[state][input]] = value;
+      prev[prevCoord[state][input]] = value;
+      state = nextState[state][input];
+      --idx;
 
-    case kX:
-      input = XInput;
-      goto state_machine_update;
-
-    case kY:
-      input = YInput;
-      goto state_machine_update;
-
-    case kColinear:
-      input = CInput;
-      goto state_machine_update;
-
-    case kPath:
-    case kShort:
-    case kVia:
-    case kTechVia:
-    case kIterm:
-    case kBterm:
-    case kOperand:
-    case kProperty:
-    case kVwire:
-    case kRect:
-    case kNop:
-    case kColor:
-    case kViaColor: {
-      utl::Logger* logger = getImpl()->getLogger();
-      logger->error(
-          utl::ODB, 1114, "Unexpected {} in dbWire::getSegment", wire_op);
-      break;
+      if (state < 13) {
+        goto decode_loop;
+      }
     }
   }
 
-  --idx;
-  goto decode_loop;
-
-state_machine_update: {
-  if (state == 0) {
-    if (opcode & WOP_DEFAULT_WIDTH) {
-      found_width = true;
-      default_width = true;
-    }
-
-    if (opcode & WOP_EXTENSION) {
-      prev_ext = wire->data_[idx + 1];
-      has_prev_ext = true;
-    }
-  } else if (state <= 3) {
-    if ((opcode & WOP_EXTENSION) && !ignore_ext) {
-      cur_ext = wire->data_[idx + 1];
-      has_cur_ext = true;
-    }
-  }
-
-  int value = wire->data_[idx];
-  cur[curCoord[state][input]] = value;
-  prev[prevCoord[state][input]] = value;
-  state = nextState[state][input];
-  --idx;
-
-  if (state < 13) {
-    goto decode_loop;
-  }
-}
-}
-
-  while (found_width == false) {
+  while (!found_width) {
     assert(idx >= 0);
     opcode = wire->opcodes_[idx];
 
@@ -1186,8 +1223,6 @@ dbWire* dbWire::create(dbNet* net_, bool global_wire)
     net->wire_ = wire->getOID();
   }
 
-  net->flags_.wire_ordered = 0;
-  net->flags_.disconnected = 0;
   for (auto callback : block->callbacks_) {
     callback->inDbWireCreate((dbWire*) wire);
   }
@@ -1228,8 +1263,6 @@ void dbWire::destroy(dbWire* wire_)
       net->global_wire_ = 0;
     } else {
       net->wire_ = 0;
-      net->flags_.wire_ordered = 0;
-      net->flags_.wire_altered = 1;
     }
   } else {
     wire_->getImpl()->getLogger()->warn(utl::ODB, 62, "This wire has no net");

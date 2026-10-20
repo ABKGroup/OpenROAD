@@ -5,18 +5,22 @@
 
 #include <array>
 #include <cstddef>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
 #include <ostream>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "db_sta/SpefWriter.hh"
 #include "db_sta/dbNetwork.hh"
 #include "db_sta/dbSta.hh"
+#include "est/ParasiticsService.h"
 #include "est/SteinerTree.h"
 #include "grt/GRoute.h"
 #include "grt/GlobalRouter.h"
@@ -33,7 +37,7 @@
 #include "utl/Logger.h"
 
 namespace utl {
-class CallBackHandler;
+class ServiceRegistry;
 }  // namespace utl
 
 namespace est {
@@ -43,15 +47,20 @@ using SteinerPt = int;
 class NetHash
 {
  public:
-  size_t operator()(const sta::Net* net) const { return hashPtr(net); }
+  // Pointer hashing is nondeterministic across runs. Switch to
+  // Network::id(net) when a Network handle is available here.
+  size_t operator()(const sta::Net* net) const
+  {
+    return std::hash<const sta::Net*>()(net);
+  }
 };
 
 enum class ParasiticsSrc
 {
-  none,
-  placement,
-  global_routing,
-  detailed_routing
+  kNone,
+  kPlacement,
+  kGlobalRouting,
+  kDetailedRouting
 };
 
 struct ParasiticsResistance
@@ -68,18 +77,21 @@ struct ParasiticsCapacitance
 
 class AbstractSteinerRenderer;
 class OdbCallBack;
-class EstimateParasiticsCallBack;
 
-class EstimateParasitics : public sta::dbStaState
+class EstimateParasitics : public sta::dbStaState, public ParasiticsService
 {
  public:
   EstimateParasitics(utl::Logger* logger,
-                     utl::CallBackHandler* callback_handler,
+                     utl::ServiceRegistry* service_registry,
                      odb::dbDatabase* db,
                      sta::dbSta* sta,
                      stt::SteinerTreeBuilder* stt_builder,
                      grt::GlobalRouter* global_router);
   ~EstimateParasitics() override;
+
+  void estimateAllGlobalRouteParasitics(int threads = 1) override;
+  void updateGlobalRouteParasitics(odb::dbNet* net,
+                                   grt::GRoute& route) override;
   void initSteinerRenderer(
       std::unique_ptr<est::AbstractSteinerRenderer> steiner_renderer);
   void setLayerRC(odb::dbTechLayer* layer,
@@ -91,25 +103,31 @@ class EstimateParasitics : public sta::dbStaState
                // Return values.
                double& res,
                double& cap) const;
-  void addClkLayer(odb::dbTechLayer* layer);
-  void addSignalLayer(odb::dbTechLayer* layer);
+  // A null tech in the setters below writes the default values used by
+  // chips whose technology has no specific values.
+  void addClkLayer(odb::dbTech* tech, odb::dbTechLayer* layer);
+  void addSignalLayer(odb::dbTech* tech, odb::dbTechLayer* layer);
   void sortClkAndSignalLayers();
   // Set the resistance and capacitance used for horizontal parasitics on signal
   // nets.
-  void setHWireSignalRC(const sta::Scene* scene,
+  void setHWireSignalRC(odb::dbTech* tech,
+                        const sta::Scene* scene,
                         double res,   // ohms/meter
                         double cap);  // farads/meter
   // Set the resistance and capacitance used for vertical wires parasitics on
   // signal nets.
-  void setVWireSignalRC(const sta::Scene* scene,
+  void setVWireSignalRC(odb::dbTech* tech,
+                        const sta::Scene* scene,
                         double res,   // ohms/meter
                         double cap);  // farads/meter
   // Set the resistance and capacitance used for parasitics on clock nets.
-  void setHWireClkRC(const sta::Scene* scene,
+  void setHWireClkRC(odb::dbTech* tech,
+                     const sta::Scene* scene,
                      double res,
                      double cap);  // farads/meter
   // Set the resistance and capacitance used for parasitics on clock nets.
-  void setVWireClkRC(const sta::Scene* scene,
+  void setVWireClkRC(odb::dbTech* tech,
+                     const sta::Scene* scene,
                      double res,
                      double cap);  // farads/meter
   // ohms/meter, farads/meter
@@ -132,13 +150,23 @@ class EstimateParasitics : public sta::dbStaState
   double wireClkVCapacitance(const sta::Scene* scene) const;
   void estimateParasitics(ParasiticsSrc src);
   void estimateParasitics(ParasiticsSrc src,
-                          std::map<sta::Scene*, std::ostream*>& spef_streams_);
+                          std::map<sta::Scene*, std::ostream*>& spef_streams);
+  // The parasitics the design has: global routes when it has them, else
+  // placement; kNone once a SPEF has been read. An unplaced design, a
+  // congested route and a placement without wire RC are errors.
+  ParasiticsSrc designParasiticsSrc();
+  // read_spef annotated the parasitics; designParasiticsSrc leaves them.
+  void spefRead() { spef_read_ = true; }
+  // Where the parasitics came from: spef, placement, global_routing or none.
+  const char* parasiticsSource() const;
   void estimateWireParasitics(sta::SpefWriter* spef_writer = nullptr);
   void estimateWireParasitic(const sta::Net* net,
                              sta::SpefWriter* spef_writer = nullptr);
+  // arc_delay_calc reduces the parasitics; nullptr uses the STA's.
   void estimateWireParasitic(const sta::Pin* drvr_pin,
                              const sta::Net* net,
-                             sta::SpefWriter* spef_writer = nullptr);
+                             sta::SpefWriter* spef_writer = nullptr,
+                             sta::ArcDelayCalc* arc_delay_calc = nullptr);
   void makeWireParasitic(sta::Net* net,
                          sta::Pin* drvr_pin,
                          sta::Pin* load_pin,
@@ -165,6 +193,7 @@ class EstimateParasitics : public sta::dbStaState
   void removeNetFromParasiticsInvalid(sta::Net* net)
   {
     parasitics_invalid_.erase(net);
+    observer_estimated_nets_.erase(net);
   }
 
   bool hasParasiticsInvalid() const { return !parasitics_invalid_.empty(); }
@@ -173,6 +202,13 @@ class EstimateParasitics : public sta::dbStaState
   void estimateGlobalRouteRC(sta::SpefWriter* spef_writer = nullptr);
   void estimateGlobalRouteRC(odb::dbNet* db_net);
   void estimateGlobalRouteParasitics(odb::dbNet* net, grt::GRoute& route);
+  void estimateRoutesInParallel(
+      const std::vector<std::pair<odb::dbNet*, grt::GRoute*>>& work,
+      int threads,
+      bool partial);
+  // Make the parasitic placeholders for every driver and net so threads
+  // only look up sta::Parasitics entries, which are not locked.
+  void ensureParasiticsForThreads();
   void clearParasitics();
 
   ////////////////////////////////////////////////////////////////
@@ -180,7 +216,7 @@ class EstimateParasitics : public sta::dbStaState
   SteinerTree* makeSteinerTree(odb::Point drvr_location,
                                const std::vector<odb::Point>& sink_locations);
   SteinerTree* makeSteinerTree(const sta::Pin* drvr_pin);
-  void updateParasitics(bool save_guides = false);
+  void updateParasitics();
   void ensureWireParasitic(const sta::Pin* drvr_pin);
   void ensureWireParasitic(const sta::Pin* drvr_pin, const sta::Net* net);
   void highlightSteiner(const sta::Pin* drvr);
@@ -197,15 +233,56 @@ class EstimateParasitics : public sta::dbStaState
   void removeDbCbkOwner();
 
   void initBlock();
+  void initChip(odb::dbChip* chip);
 
   utl::Logger* getLogger() { return logger_; }
 
+  ////////////////////////////////////////////////////////////////
+  // Profiling-related methods and attributes
+
+  // updateParasitics() for an observer, such as the repair setup profiler,
+  // that reads timing in the middle of a repair step.  The nets it estimates
+  // stay in pendingNetCount() until the next updateParasitics().
+  void updateParasiticsForObserver();
+  // The nets the next updateParasitics() would estimate had no observer
+  // updated the parasitics early: the invalid nets plus the nets
+  // updateParasiticsForObserver() estimated since the last
+  // updateParasitics().
+  size_t pendingNetCount() const;
+
  private:
-  void ensureParasitics();
+  // The nets updateParasiticsForObserver() estimated since the last
+  // updateParasitics().
+  std::unordered_set<const sta::Net*, NetHash> observer_estimated_nets_;
+
+  // Wire RC values and layers of one technology, indexed by corner->index()
+  struct WireRC
+  {
+    std::vector<odb::dbTechLayer*> signal_layers;
+    std::vector<odb::dbTechLayer*> clk_layers;
+    std::vector<ParasiticsResistance> signal_res;   // ohms/meter
+    std::vector<ParasiticsCapacitance> signal_cap;  // Farads/meter
+    std::vector<ParasiticsResistance> clk_res;      // ohms/meter
+    std::vector<ParasiticsCapacitance> clk_cap;     // Farads/meter
+  };
+
+  odb::dbTech* currentTech() const;
+  WireRC& wireRC(odb::dbTech* tech) { return wire_rc_[tech]; }
+  // Resolve one WireRC category for the current technology; a category left
+  // unset for a tech falls back to the defaults (nullptr entry) independently.
+  template <typename T>
+  const std::vector<T>& resolveWireRC(std::vector<T> WireRC::* category) const;
+  bool isSkipPin(const sta::Pin* pin) const;
+  bool hasIdealClocks(const sta::Mode* mode) const;
+  bool hasIdealClocks() const;
+  bool isSkipNet(const sta::Net* net) const;
   void estimateWireParasiticSteiner(const sta::Pin* drvr_pin,
                                     const sta::Net* net,
-                                    sta::SpefWriter* spef_writer);
-  void makePadParasitic(const sta::Net* net, sta::SpefWriter* spef_writer);
+                                    sta::SpefWriter* spef_writer,
+                                    sta::ArcDelayCalc* arc_delay_calc);
+  void makePadParasitic(const sta::Net* net,
+                        sta::SpefWriter* spef_writer,
+                        sta::ArcDelayCalc* arc_delay_calc);
   bool isPadNet(const sta::Net* net) const;
   bool isPadPin(const sta::Pin* pin) const;
   bool isPad(const sta::Instance* inst) const;
@@ -219,14 +296,26 @@ class EstimateParasitics : public sta::dbStaState
                                 size_t& resistor_id,
                                 sta::Scene* scene,
                                 std::set<const sta::Pin*>& connected_pins,
+                                const sta::Net* net,
+                                int& max_node_index,
                                 bool is_clk);
+  void insertViaResistances(odb::dbTechLayer* pin_layer,
+                            odb::dbTechLayer* tree_layer,
+                            sta::Parasitics* parasitics,
+                            sta::Parasitic* parasitic,
+                            sta::ParasiticNode* pin_node,
+                            sta::ParasiticNode* node,
+                            size_t& resistor_id,
+                            sta::Scene* corner,
+                            const sta::Net* net,
+                            int& max_node_index);
   void net2Pins(const sta::Net* net,
                 const sta::Pin*& pin1,
                 const sta::Pin*& pin2) const;
   double dbuToMeters(int dist) const;
 
   utl::Logger* logger_ = nullptr;
-  std::unique_ptr<EstimateParasiticsCallBack> estimate_parasitics_cbk_;
+  utl::ServiceRegistry* service_registry_ = nullptr;
   stt::SteinerTreeBuilder* stt_builder_ = nullptr;
   grt::GlobalRouter* global_router_ = nullptr;
   grt::IncrementalGRoute* incr_groute_ = nullptr;
@@ -235,19 +324,15 @@ class EstimateParasitics : public sta::dbStaState
   odb::dbBlock* block_ = nullptr;
   std::unique_ptr<OdbCallBack> db_cbk_;
 
-  std::vector<odb::dbTechLayer*> signal_layers_;
-  std::vector<odb::dbTechLayer*> clk_layers_;
-  // Layer RC per wire length indexed by layer->getNumber(), corner->index
+  // Layer RC per wire length indexed by layer number, then corner->index()
   std::vector<std::vector<double>> layer_res_;  // ohms/meter
   std::vector<std::vector<double>> layer_cap_;  // Farads/meter
-  // Signal wire RC indexed by corner->index
-  std::vector<ParasiticsResistance> wire_signal_res_;   // ohms/metre
-  std::vector<ParasiticsCapacitance> wire_signal_cap_;  // Farads/meter
-  // Clock wire RC.
-  std::vector<ParasiticsResistance> wire_clk_res_;   // ohms/metre
-  std::vector<ParasiticsCapacitance> wire_clk_cap_;  // Farads/meter
+  // Wire RC per technology; the nullptr entry holds the defaults used by
+  // chips whose technology has no specific values
+  std::unordered_map<odb::dbTech*, WireRC> wire_rc_;
 
-  ParasiticsSrc parasitics_src_ = ParasiticsSrc::none;
+  ParasiticsSrc parasitics_src_ = ParasiticsSrc::kNone;
+  bool spef_read_ = false;
 
   std::unordered_set<const sta::Net*, NetHash> parasitics_invalid_;
 

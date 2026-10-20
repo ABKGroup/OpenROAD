@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -246,8 +247,51 @@ class HardMacro
  public:
   struct Halo
   {
-    int width{0};
-    int height{0};
+    int left{0};
+    int bottom{0};
+    int right{0};
+    int top{0};
+
+    Halo() = default;
+
+    Halo(int spacing)
+        : left(spacing), bottom(spacing), right(spacing), top(spacing)
+    {
+    }
+
+    Halo(int left, int bottom, int right, int top)
+        : left(left), bottom(bottom), right(right), top(top)
+    {
+    }
+
+    Halo(odb::dbBox* halo)
+    {
+      left = halo->xMin();
+      bottom = halo->yMin();
+      right = halo->xMax();
+      top = halo->yMax();
+    }
+
+    Halo flooredToHalo(const Halo& halo) const
+    {
+      return {std::max(left, halo.left),
+              std::max(bottom, halo.bottom),
+              std::max(right, halo.right),
+              std::max(top, halo.top)};
+    }
+
+    Halo flooredToChannel(const Channel& minimum) const
+    {
+      return {std::max(left, minimum.width / 2),
+              std::max(bottom, minimum.height / 2),
+              std::max(right, minimum.width / 2),
+              std::max(top, minimum.height / 2)};
+    }
+
+    bool isZero() const
+    {
+      return left == 0 && bottom == 0 && right == 0 && top == 0;
+    }
   };
 
   HardMacro(const odb::Point& location,
@@ -299,6 +343,7 @@ class HardMacro
   int getRealHeight() const;
   int64_t getRealArea() const;
 
+  void setOrientation(const odb::dbOrientType& orient);
   odb::dbOrientType getOrientation() const;
 
   // Interfaces with OpenDB

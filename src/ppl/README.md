@@ -20,8 +20,9 @@ The `define_pin_shape_pattern` command defines a pin placement grid on the
 specified layer. This grid has positions inside the die area, not only at
 the edges of the die boundary.
 
+<!-- checker: skip -->
 ```tcl
-define_pin_shape_pattern 
+define_pin_shape_pattern
     [-layer layer]
     [-x_step x_step]
     [-y_step y_step]
@@ -63,8 +64,9 @@ It is possible to use the `-region`, `-group` and `-order` arguments together
 per `set_io_pin_constraint` call, but the `-mirrored_pins` argument should be
 called alone.
 
+<!-- checker: skip -->
 ```tcl
-set_io_pin_constraint 
+set_io_pin_constraint
     [-direction direction]
     [-pin_names names]
     [-region edge:interval]
@@ -103,8 +105,9 @@ cannot be placed.
 It is possible to use the `-region` argument multiple times in a single call
 of `exclude_io_pin_region`.
 
+<!-- checker: skip -->
 ```tcl
-exclude_io_pin_region 
+exclude_io_pin_region
     -region edge:interval
 ```
 
@@ -120,6 +123,7 @@ The `clear_io_pin_constraints` command clears all the previously-defined
 constraints and pin shape patterns created with `set_io_pin_constraint` or
 `define_pin_shape_pattern`.
 
+<!-- checker: skip -->
 ```tcl
 clear_io_pin_constraints
 ```
@@ -258,14 +262,15 @@ The `place_pins` command places all pins together. Use the following command to 
 
 ```tcl
 place_pins 
-    -hor_layers h_layers
-    -ver_layers v_layers
+    [-hor_layers h_layers]
+    [-ver_layers v_layers]
     [-corner_avoidance length]
     [-min_distance distance]
     [-min_distance_in_tracks]
     [-exclude region]
     [-group_pins pin_list]
     [-annealing]
+    [-minimize_displacement]
     [-write_pin_placement file_name]
 ```
 
@@ -281,7 +286,12 @@ place_pins
 | `-exclude` | A region where pins cannot be placed. Either `top\|bottom\|left\|right:edge_interval`, which is the edge interval from the selected edge; `begin:end` for begin-end of all edges. |
 | `-group_pins` | A list of pins to be placed together on the die boundary. |
 | `-annealing` | Flag to enable simulated annealing pin placement. |
+| `-minimize_displacement` | Rank slots by how far they are from where each pin already is, rather than by the wirelength of its net. Use it to legalize a pin placement that is already placed. |
 | `-write_pin_placement` | A file with the pin placement generated in the format of multiple calls for the `place_pin` command. |
+
+The layers and the spacing of the slots can be kept with `set_place_config`
+(see the gpl documentation). `place_pins` uses those settings for any switch it
+is not given; the switches given to `place_pins` apply only to that call.
 
 The `exclude` option syntax is `-exclude edge:interval`. The `edge` values are
 (top|bottom|left|right). The `interval` can be the whole edge, with the `*`
@@ -306,6 +316,21 @@ write_pin_placement
 | ----- | ----- |
 | `file_name` | The name of the file with the pin placement. |
 | `-placed_status` | When this flag is enabled, the file will be generated´with the `-placed_status` flag in each `place_pin` command call. |
+
+### Rectilinear Floorplans
+
+The `place_pins` command supports designs with a rectilinear
+(non-rectangular) die outline, such as those created by
+`initialize_floorplan` with a polygonal `-die_area` (see the
+[`ifp` documentation](../ifp/README.md#rectilinear-floorplans)).
+Rectilinear mode is detected automatically from the die polygon stored in the
+database; no extra option is required. Pins are distributed along the
+edges of the polygonal die boundary.
+
+<!-- checker: skip -->
+```tcl
+place_pins -hor_layers metal3 -ver_layers metal2
+```
 
 ## Useful Developer Commands
 
@@ -335,10 +360,10 @@ Example scripts of `ppl` running on a sample design of `gcd` as follows:
 
 There are a set of regression tests in `./test`. For more information, refer to this [section](../../README.md#regression-tests).
 
-Simply run the following script:
+Simply run the following command:
 
 ```shell
-./test/regression
+bazelisk test //src/ppl/...
 ```
 
 ## Limitations
@@ -347,11 +372,6 @@ Simply run the following script:
 
 - This code depends on [Munkres](src/munkres/README.txt).
 
-## FAQs
-
-Check out [GitHub discussion](https://github.com/The-OpenROAD-Project/OpenROAD/discussions/categories/q-a?discussions_q=category%3AQ%26A+ioplacer+in%3Atitle)
-about this tool.
-
 ## License
 
-BSD 3-Clause License. See [LICENSE](LICENSE) file.
+BSD 3-Clause License. See [LICENSE](../../LICENSE) file.

@@ -8,6 +8,15 @@ cc_library or cc_binary rules. See below for expected usage.
 cc_library(srcs=[":python_foo"])
 python_wrap_cc(name = "python_foo", srcs=["exception.i"],...)
 """
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load(
+    "//bazel:swig_common.bzl",
+    "get_transitive_includes",
+    "get_transitive_options",
+    "get_transitive_srcs",
+)
+
 PythonSwigInfo = provider(
     "PythonSwigInfo for taking dependencies on other swig info rules",
     fields = [
@@ -19,28 +28,20 @@ PythonSwigInfo = provider(
 
 PYTHON_STABLE_API_DEFINE = "Py_LIMITED_API=0x030A0000"
 
-def _get_transitive_srcs(srcs, deps):
-    return depset(
-        srcs,
-        transitive = [dep[PythonSwigInfo].transitive_srcs for dep in deps],
-    )
-
-def _get_transitive_includes(local_includes, deps):
-    return depset(
-        local_includes,
-        transitive = [dep[PythonSwigInfo].includes for dep in deps],
-    )
-
-def _get_transitive_options(options, deps):
-    return depset(
-        options,
-        transitive = [dep[PythonSwigInfo].swig_options for dep in deps],
-    )
+PYTHON_EXTENSION_LINKOPTS = select({
+    "@platforms//os:macos": [
+        "-undefined",
+        "dynamic_lookup",
+    ],
+    "//conditions:default": [],
+})
 
 def _python_wrap_cc_impl(ctx):
     """Generates a single C++ file from the provided srcs in a DefaultInfo."""
     if len(ctx.files.srcs) > 1 and not ctx.attr.root_swig_src:
         fail("If multiple src files are provided, root_swig_src must be specified.")
+
+    swig_lib_dir = ctx.file._swig_swg.dirname
 
     root_file = ctx.file.root_swig_src or ctx.files.srcs[0]
 
@@ -50,15 +51,22 @@ def _python_wrap_cc_impl(ctx):
     py_output_file = ctx.actions.declare_file(py_outfile_name)
 
     include_root_directory = ""
+    if ctx.label.workspace_root:
+        include_root_directory = ctx.label.workspace_root + "/"
     if ctx.label.package:
-        include_root_directory = ctx.label.package + "/"
+        include_root_directory += ctx.label.package + "/"
 
-    src_inputs = _get_transitive_srcs(ctx.files.srcs + ctx.files.root_swig_src, ctx.attr.deps)
-    includes_paths = _get_transitive_includes(
+    src_inputs = get_transitive_srcs(
+        PythonSwigInfo,
+        ctx.files.srcs + ctx.files.root_swig_src,
+        ctx.attr.deps,
+    )
+    includes_paths = get_transitive_includes(
+        PythonSwigInfo,
         ["{}{}".format(include_root_directory, include) for include in ctx.attr.swig_includes],
         ctx.attr.deps,
     )
-    swig_options = _get_transitive_options(ctx.attr.swig_options, ctx.attr.deps)
+    swig_options = get_transitive_options(PythonSwigInfo, ctx.attr.swig_options, ctx.attr.deps)
 
     args = ctx.actions.args()
     args.add("-DBAZEL=1")
@@ -77,8 +85,9 @@ def _python_wrap_cc_impl(ctx):
         outputs = [cc_output_file, py_output_file],
         inputs = src_inputs,
         arguments = [args],
-        tools = ctx.files._swig,
-        executable = ([file for file in ctx.files._swig if file.basename == "swig"][0]),
+        env = {"SWIG_LIB": swig_lib_dir},
+        tools = ctx.files._swig_lib,
+        executable = ctx.executable._swig,
     )
     return [
         DefaultInfo(files = depset([cc_output_file, py_output_file])),
@@ -122,9 +131,64 @@ python_wrap_cc = rule(
             doc = "args to pass directly to the swig binary",
         ),
         "_swig": attr.label(
-            default = "@org_swig//:swig_stable",
+            default = "@swig",
             allow_files = True,
             cfg = "exec",
+            executable = True,
+        ),
+        "_swig_lib": attr.label(
+            default = "@swig//:lib_python",
+            allow_files = True,
+        ),
+        "_swig_swg": attr.label(
+            default = "@swig//:swig_swg",
+            allow_single_file = True,
+            doc = "SWIG swig.swg library file used for determining SWIG_LIB " +
+                  "env variable (internal attribute).",
         ),
     },
 )
+
+# Dependencies every SWIG Python wrapper needs, beyond its own tool.
+_PYTHON_WRAP_COMMON_DEPS = [
+    "//:ord",
+    "//src/odb/src/db",
+    "//src/utl",
+    "@boost.stacktrace",
+    "@rules_python//python/cc:current_py_cc_headers",
+]
+
+def python_wrap_library(
+        name,
+        srcs = [],
+        deps = [],
+        includes = [],
+        wrapper = ":swig-py",
+        local_defines = ["BAZEL=1"]):
+    """Compiles a tool's SWIG Python wrapper for linking into //:_openroad.so.
+
+    Every module's wrapper goes into that one library, so all of them share
+    one copy of the C++ state; python/modules/_openroad_loader.py loads each
+    module's init function from it.
+
+    Args:
+      name: The library name.
+      srcs: Headers the wrapper includes, beyond the tool's libraries.
+      deps: The tool's own libraries; the common dependencies are added.
+      includes: Include directories the wrapper needs, relative to the package.
+      wrapper: The python_wrap_cc target to compile.
+      local_defines: Defines for compiling the wrapper.
+    """
+    cc_library(
+        name = name,
+        srcs = srcs + [wrapper],
+        includes = includes,
+        local_defines = local_defines + [PYTHON_STABLE_API_DEFINE],
+        visibility = ["//:__pkg__"],
+        # A tool's own deps may name a common dep relative to its package.
+        deps = {
+            str(native.package_relative_label(dep)): None
+            for dep in deps + _PYTHON_WRAP_COMMON_DEPS
+        }.keys(),
+        alwayslink = True,
+    )

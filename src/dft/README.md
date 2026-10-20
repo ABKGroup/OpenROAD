@@ -188,6 +188,8 @@ Writes a DEF-style `SCANCHAINS` section (often called “SCANDEF”) describing 
 stitched scan chains. This uses the scan chain objects stored in ODB by
 `execute_dft_plan`.
 
+**Note: This is currently not implemented and this command currently operates as a
+nop.**
 ```tcl
 write_scandef -file <path>
 ```
@@ -220,10 +222,10 @@ execute_dft_plan
 
 There are a set of regression tests in `./test`. For more information, refer to this [section](../../README.md#regression-tests).
 
-Simply run the following script:
+Simply run the following command:
 
 ```shell
-./test/regression
+bazelisk test //src/dft/...
 ```
 
 

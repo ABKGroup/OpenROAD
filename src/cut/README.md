@@ -15,10 +15,10 @@ This module is not meant to be used directly by users, and as such does not prov
 
 There are a set of regression tests in `./test`. For more information, refer to this [section](../../README.md#regression-tests).
 
-Simply run the following script:
+Simply run the following command:
 
 ```shell
-./test/regression
+bazelisk test //src/cut/...
 ```
 
 ## Limitations
@@ -29,4 +29,4 @@ Simply run the following script:
 
 ## License
 
-BSD 3-Clause License. See [LICENSE](LICENSE) file.
+BSD 3-Clause License. See [LICENSE](../../LICENSE) file.
