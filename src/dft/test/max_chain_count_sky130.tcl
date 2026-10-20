@@ -13,9 +13,9 @@ set_dft_config -max_length 4 -max_chains 1
 
 scan_replace
 
-report_dft_plan -verbose
-execute_dft_plan
-
-set verilog_file [make_result_file max_chain_count_sky130.v]
-write_verilog $verilog_file
-diff_files $verilog_file max_chain_count_sky130.vok
+# Infeasible: max_length*max_chains < total_bits must error.
+set rc [catch { report_dft_plan -verbose } msg]
+if { $rc == 0 } {
+  error "Expected max_chain_count_sky130 to fail due to infeasible max_chains"
+}
+puts "Caught expected error: $msg"

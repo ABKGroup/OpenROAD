@@ -1,0 +1,11 @@
+[INFO ODB-0227] LEF file: Nangate45/Nangate45_tech.lef, created 22 layers, 27 vias
+[INFO ODB-0227] LEF file: Nangate45/Nangate45_stdcell.lef, created 135 library cells
+[INFO DFT-0250] Auto-excluded 3 shift-register instance(s) in 1 chain(s) (min_length=2)
+***************************
+Report DFT Plan
+Number of chains: 0
+Clock domain: No Mix
+***************************
+
+
+No differences found.

@@ -1,0 +1,4 @@
+[INFO ODB-0227] LEF file: sky130hd/sky130hd.tlef, created 13 layers, 25 vias
+[INFO ODB-0227] LEF file: sky130hd/sky130_fd_sc_hd_merged.lef, created 437 library cells
+[ERROR DFT-0176] Scan constraints infeasible: instances forced into one chain span multiple hash domains (1 and 2) under clock_mixing=Clock Mix polarity_mode=Strict.
+Caught expected error: DFT-0176

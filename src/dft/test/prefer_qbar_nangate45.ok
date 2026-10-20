@@ -1,0 +1,6 @@
+[INFO ODB-0227] LEF file: Nangate45/Nangate45_tech.lef, created 22 layers, 27 vias
+[INFO ODB-0227] LEF file: Nangate45/Nangate45_stdcell.lef, created 135 library cells
+[WARNING DFT-0226] Scan chain 'chain_0' scan-in port 'scan_in_0' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
+[WARNING DFT-0230] Scan chain 'chain_0' scan-out port 'scan_out_0' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
+[INFO DFT-0268] Wrote scan chains to 'prefer_qbar_nangate45.scandef'
+No differences found.

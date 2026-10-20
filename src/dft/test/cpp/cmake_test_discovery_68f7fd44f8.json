@@ -1,0 +1,17 @@
+{
+  "tests": 1,
+  "name": "AllTests",
+  "testsuites": [
+    {
+      "name": "TestScanOrderOpt",
+      "tests": 1,
+      "testsuite": [
+        {
+          "name": "UsesScanOutToScanInDistance",
+          "file": "\/home\/memzfs_projects\/or_dft\/ORD-abk\/src\/dft\/test\/cpp\/TestScanOrderOpt.cpp",
+          "line": 71
+        }
+      ]
+    }
+  ]
+}

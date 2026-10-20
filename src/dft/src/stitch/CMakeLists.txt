@@ -21,4 +21,5 @@ target_link_libraries(dft_stitch_lib
     dft_architect_lib
     dft_utils_lib
     dft_config_lib
+    dft_clock_domain_lib
 )

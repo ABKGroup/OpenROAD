@@ -1,0 +1,103 @@
+VERSION 5.8 ;
+BUSBITCHARS "[]" ;
+DIVIDERCHAR "/" ;
+
+MACRO dft_mbff2_scan
+  CLASS CORE ;
+  ORIGIN 0 0 ;
+  SIZE 1.00 BY 1.00 ;
+  SYMMETRY X Y R90 ;
+  SITE unithd ;
+
+  PIN CLK
+    DIRECTION INPUT ;
+    USE CLOCK ;
+    PORT
+      LAYER met1 ;
+        RECT 0.05 0.05 0.15 0.15 ;
+    END
+  END CLK
+
+  PIN D0
+    DIRECTION INPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER met1 ;
+        RECT 0.05 0.25 0.15 0.35 ;
+    END
+  END D0
+
+  PIN D1
+    DIRECTION INPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER met1 ;
+        RECT 0.05 0.45 0.15 0.55 ;
+    END
+  END D1
+
+  PIN Q0
+    DIRECTION OUTPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER met1 ;
+        RECT 0.85 0.25 0.95 0.35 ;
+    END
+  END Q0
+
+  PIN Q1
+    DIRECTION OUTPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER met1 ;
+        RECT 0.85 0.45 0.95 0.55 ;
+    END
+  END Q1
+
+  PIN SE
+    DIRECTION INPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER met1 ;
+        RECT 0.05 0.65 0.15 0.75 ;
+    END
+  END SE
+
+  PIN SI0
+    DIRECTION INPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER met1 ;
+        RECT 0.05 0.85 0.15 0.95 ;
+    END
+  END SI0
+
+  PIN SI1
+    DIRECTION INPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER met1 ;
+        RECT 0.25 0.85 0.35 0.95 ;
+    END
+  END SI1
+
+  PIN SO0
+    DIRECTION OUTPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER met1 ;
+        RECT 0.85 0.85 0.95 0.95 ;
+    END
+  END SO0
+
+  PIN SO1
+    DIRECTION OUTPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER met1 ;
+        RECT 0.65 0.85 0.75 0.95 ;
+    END
+  END SO1
+END dft_mbff2_scan
+
+END LIBRARY

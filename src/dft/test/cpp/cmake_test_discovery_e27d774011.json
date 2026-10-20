@@ -1,0 +1,72 @@
+{
+  "tests": 12,
+  "name": "AllTests",
+  "testsuites": [
+    {
+      "name": "TestScanArchitectHeuristic",
+      "tests": 12,
+      "testsuite": [
+        {
+          "name": "ArchitectWithOneClockDomainNoMix",
+          "file": "\/home\/memzfs_projects\/or_dft\/ORD-abk\/src\/dft\/test\/cpp\/TestScanArchitectHeuristic.cpp",
+          "line": 66
+        },
+        {
+          "name": "ArchitectWithTwoClockDomainNoMix",
+          "file": "\/home\/memzfs_projects\/or_dft\/ORD-abk\/src\/dft\/test\/cpp\/TestScanArchitectHeuristic.cpp",
+          "line": 117
+        },
+        {
+          "name": "ArchitectWithTwoEdgesNoMix",
+          "file": "\/home\/memzfs_projects\/or_dft\/ORD-abk\/src\/dft\/test\/cpp\/TestScanArchitectHeuristic.cpp",
+          "line": 177
+        },
+        {
+          "name": "ChainNamesCountMismatchThrows",
+          "file": "\/home\/memzfs_projects\/or_dft\/ORD-abk\/src\/dft\/test\/cpp\/TestScanArchitectHeuristic.cpp",
+          "line": 246
+        },
+        {
+          "name": "ChainNamesDuplicateThrows",
+          "file": "\/home\/memzfs_projects\/or_dft\/ORD-abk\/src\/dft\/test\/cpp\/TestScanArchitectHeuristic.cpp",
+          "line": 277
+        },
+        {
+          "name": "GroupCycleThrows",
+          "file": "\/home\/memzfs_projects\/or_dft\/ORD-abk\/src\/dft\/test\/cpp\/TestScanArchitectHeuristic.cpp",
+          "line": 288
+        },
+        {
+          "name": "UnknownChainAssignmentThrows",
+          "file": "\/home\/memzfs_projects\/or_dft\/ORD-abk\/src\/dft\/test\/cpp\/TestScanArchitectHeuristic.cpp",
+          "line": 299
+        },
+        {
+          "name": "ConflictingAssignmentsAcrossGroupThrows",
+          "file": "\/home\/memzfs_projects\/or_dft\/ORD-abk\/src\/dft\/test\/cpp\/TestScanArchitectHeuristic.cpp",
+          "line": 329
+        },
+        {
+          "name": "MaxImbalanceInfeasibleThrows",
+          "file": "\/home\/memzfs_projects\/or_dft\/ORD-abk\/src\/dft\/test\/cpp\/TestScanArchitectHeuristic.cpp",
+          "line": 368
+        },
+        {
+          "name": "BeforeConstraintCycleThrows",
+          "file": "\/home\/memzfs_projects\/or_dft\/ORD-abk\/src\/dft\/test\/cpp\/TestScanArchitectHeuristic.cpp",
+          "line": 397
+        },
+        {
+          "name": "FixedEdgeCycleThrows",
+          "file": "\/home\/memzfs_projects\/or_dft\/ORD-abk\/src\/dft\/test\/cpp\/TestScanArchitectHeuristic.cpp",
+          "line": 433
+        },
+        {
+          "name": "PolarityBeforeConstraintThrows",
+          "file": "\/home\/memzfs_projects\/or_dft\/ORD-abk\/src\/dft\/test\/cpp\/TestScanArchitectHeuristic.cpp",
+          "line": 469
+        }
+      ]
+    }
+  ]
+}

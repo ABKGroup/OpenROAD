@@ -23,6 +23,8 @@ ScanCell::ScanCell(const std::string& name,
 {
 }
 
+ScanCell::~ScanCell() = default;
+
 std::string_view ScanCell::getName() const
 {
   return name_;
@@ -31,6 +33,28 @@ std::string_view ScanCell::getName() const
 const ClockDomain& ScanCell::getClockDomain() const
 {
   return *clock_domain_;
+}
+
+void ScanCell::setTimingSlacks(float setup_slack, float hold_slack)
+{
+  setup_slack_ = setup_slack;
+  hold_slack_ = hold_slack;
+  has_timing_slacks_ = true;
+}
+
+bool ScanCell::hasTimingSlacks() const
+{
+  return has_timing_slacks_;
+}
+
+float ScanCell::getSetupSlack() const
+{
+  return setup_slack_;
+}
+
+float ScanCell::getHoldSlack() const
+{
+  return hold_slack_;
 }
 
 void ScanCell::Connect(const ScanLoad& load,

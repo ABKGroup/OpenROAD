@@ -1,0 +1,20 @@
+VERSION 5.8 ;
+DIVIDERCHAR "/" ;
+BUSBITCHARS "[]" ;
+DESIGN split_multibit_scan_cells ;
+UNITS DISTANCE MICRONS 1000 ;
+DIEAREA ( 0 0 ) ( 2000 2000 ) ;
+
+COMPONENTS 1 ;
+    - mbff1 dft_mbff2_scan + PLACED ( 1000 1000 ) N ;
+END COMPONENTS
+
+PINS 1 ;
+    - clock + NET clock + DIRECTION INPUT + USE SIGNAL ;
+END PINS
+
+NETS 1 ;
+    - clock ( PIN clock ) ( mbff1 CLK ) + USE SIGNAL ;
+END NETS
+
+END DESIGN

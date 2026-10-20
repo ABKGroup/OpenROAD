@@ -24,7 +24,8 @@ odb::dbInst* ReplaceCell(
     odb::dbBlock* top_block,
     odb::dbInst* old_instance,
     odb::dbMaster* new_master,
-    const std::unordered_map<std::string, std::string>& port_mapping);
+    const std::unordered_map<std::string, std::string>& port_mapping,
+    utl::Logger* logger);
 
 // Returns true if the given instance cell's is a sequential cell, false
 // otherwise

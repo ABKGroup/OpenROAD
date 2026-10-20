@@ -24,12 +24,25 @@ module scan_architect (clock1,
     set_b,
     scan_enable_0,
     scan_in_0,
+    scan_out_0,
     scan_in_1,
+    scan_out_1,
     scan_in_2,
+    scan_out_2,
     scan_in_3,
+    scan_out_3,
     scan_in_4,
+    scan_out_4,
     scan_in_5,
-    scan_in_6);
+    scan_out_5,
+    scan_in_6,
+    scan_out_6,
+    scan_in_7,
+    scan_out_7,
+    scan_in_8,
+    scan_out_8,
+    scan_in_9,
+    scan_out_9);
  input clock1;
  input clock2;
  output output1;
@@ -56,13 +69,36 @@ module scan_architect (clock1,
  input set_b;
  input scan_enable_0;
  input scan_in_0;
+ output scan_out_0;
  input scan_in_1;
+ output scan_out_1;
  input scan_in_2;
+ output scan_out_2;
  input scan_in_3;
+ output scan_out_3;
  input scan_in_4;
+ output scan_out_4;
  input scan_in_5;
+ output scan_out_5;
  input scan_in_6;
+ output scan_out_6;
+ input scan_in_7;
+ output scan_out_7;
+ input scan_in_8;
+ output scan_out_8;
+ input scan_in_9;
+ output scan_out_9;
 
+ wire dft_lockup_net_0_1;
+ wire dft_lockup_net_1_1;
+ wire dft_lockup_net_2_1;
+ wire dft_lockup_net_3_1;
+ wire dft_lockup_net_4_1;
+ wire dft_lockup_net_5_1;
+ wire dft_lockup_net_6_1;
+ wire dft_lockup_net_7_1;
+ wire dft_lockup_net_8_1;
+ wire dft_lockup_net_9_1;
 
  sky130_fd_sc_hd__sdfbbn_1 ff10_clk2_falling (.D(port1),
     .Q(output20),
@@ -72,116 +108,162 @@ module scan_architect (clock1,
     .CLK_N(clock2));
  sky130_fd_sc_hd__sdfsbp_1 ff10_clk2_rising (.D(port1),
     .Q(output10),
-    .SCD(output17),
+    .SCD(scan_in_0),
     .SCE(scan_enable_0),
     .SET_B(set_b),
     .CLK(clock2));
  sky130_fd_sc_hd__sdfbbn_1 ff1_clk1_falling (.D(port1),
     .Q(output11),
-    .SCD(output13),
+    .SCD(scan_in_6),
     .SCE(scan_enable_0),
     .SET_B(set_b),
     .CLK_N(clock1));
  sky130_fd_sc_hd__sdfsbp_1 ff1_clk1_rising (.D(port1),
     .Q(output1),
-    .SCD(output3),
+    .SCD(scan_in_1),
     .SCE(scan_enable_0),
     .SET_B(set_b),
     .CLK(clock1));
  sky130_fd_sc_hd__sdfbbn_1 ff2_clk2_falling (.D(port1),
     .Q(output12),
-    .SCD(scan_in_1),
+    .SCD(scan_in_7),
     .SCE(scan_enable_0),
     .SET_B(set_b),
     .CLK_N(clock2));
  sky130_fd_sc_hd__sdfsbp_1 ff2_clk2_rising (.D(port1),
     .Q(output2),
-    .SCD(output4),
+    .SCD(scan_in_2),
     .SCE(scan_enable_0),
     .SET_B(set_b),
     .CLK(clock2));
  sky130_fd_sc_hd__sdfbbn_1 ff3_clk1_falling (.D(port1),
     .Q(output13),
-    .SCD(output15),
+    .SCD(scan_in_8),
     .SCE(scan_enable_0),
     .SET_B(set_b),
     .CLK_N(clock1));
  sky130_fd_sc_hd__sdfsbp_1 ff3_clk1_rising (.D(port1),
     .Q(output3),
-    .SCD(scan_in_6),
+    .SCD(scan_in_3),
     .SCE(scan_enable_0),
     .SET_B(set_b),
     .CLK(clock1));
  sky130_fd_sc_hd__sdfbbn_1 ff4_clk2_falling (.D(port1),
     .Q(output14),
-    .SCD(output16),
+    .SCD(scan_in_9),
     .SCE(scan_enable_0),
     .SET_B(set_b),
     .CLK_N(clock2));
  sky130_fd_sc_hd__sdfsbp_1 ff4_clk2_rising (.D(port1),
     .Q(output4),
-    .SCD(output6),
+    .SCD(scan_in_4),
     .SCE(scan_enable_0),
     .SET_B(set_b),
     .CLK(clock2));
  sky130_fd_sc_hd__sdfbbn_1 ff5_clk1_falling (.D(port1),
     .Q(output15),
-    .SCD(scan_in_4),
+    .SCD(dft_lockup_net_5_1),
     .SCE(scan_enable_0),
     .SET_B(set_b),
     .CLK_N(clock1));
  sky130_fd_sc_hd__sdfsbp_1 ff5_clk1_rising (.D(port1),
     .Q(output5),
-    .SCD(output7),
+    .SCD(dft_lockup_net_0_1),
     .SCE(scan_enable_0),
     .SET_B(set_b),
     .CLK(clock1));
  sky130_fd_sc_hd__sdfbbn_1 ff6_clk2_falling (.D(port1),
     .Q(output16),
-    .SCD(output18),
+    .SCD(dft_lockup_net_6_1),
     .SCE(scan_enable_0),
     .SET_B(set_b),
     .CLK_N(clock2));
  sky130_fd_sc_hd__sdfsbp_1 ff6_clk2_rising (.D(port1),
     .Q(output6),
-    .SCD(scan_in_2),
+    .SCD(dft_lockup_net_1_1),
     .SCE(scan_enable_0),
     .SET_B(set_b),
     .CLK(clock2));
  sky130_fd_sc_hd__sdfbbn_1 ff7_clk1_falling (.D(port1),
     .Q(output17),
-    .SCD(output19),
+    .SCD(dft_lockup_net_7_1),
     .SCE(scan_enable_0),
     .SET_B(set_b),
     .CLK_N(clock1));
  sky130_fd_sc_hd__sdfsbp_1 ff7_clk1_rising (.D(port1),
     .Q(output7),
-    .SCD(output9),
+    .SCD(dft_lockup_net_2_1),
     .SCE(scan_enable_0),
     .SET_B(set_b),
     .CLK(clock1));
  sky130_fd_sc_hd__sdfbbn_1 ff8_clk2_falling (.D(port1),
     .Q(output18),
-    .SCD(scan_in_0),
+    .SCD(dft_lockup_net_8_1),
     .SCE(scan_enable_0),
     .SET_B(set_b),
     .CLK_N(clock2));
  sky130_fd_sc_hd__sdfsbp_1 ff8_clk2_rising (.D(port1),
     .Q(output8),
-    .SCD(output20),
+    .SCD(dft_lockup_net_3_1),
     .SCE(scan_enable_0),
     .SET_B(set_b),
     .CLK(clock2));
  sky130_fd_sc_hd__sdfbbn_1 ff9_clk1_falling (.D(port1),
     .Q(output19),
-    .SCD(scan_in_3),
+    .SCD(dft_lockup_net_9_1),
     .SCE(scan_enable_0),
     .SET_B(set_b),
     .CLK_N(clock1));
  sky130_fd_sc_hd__sdfsbp_1 ff9_clk1_rising (.D(port1),
     .Q(output9),
-    .SCD(scan_in_5),
+    .SCD(dft_lockup_net_4_1),
     .SCE(scan_enable_0),
     .SET_B(set_b),
     .CLK(clock1));
+ sky130_fd_sc_hd__dlxtp_1 dft_lockup_0_1 (.D(output10),
+    .Q(dft_lockup_net_0_1),
+    .GATE(clock1));
+ sky130_fd_sc_hd__sdfbbn_1 ff10_clk2_falling (.D(port1),
+    .Q(output20),
+    .SCD(scan_in_5),
+    .SCE(scan_enable_0),
+    .SET_B(set_b),
+    .CLK_N(clock2));
+ sky130_fd_sc_hd__dlxtp_1 dft_lockup_1_1 (.D(output1),
+    .Q(dft_lockup_net_1_1),
+    .GATE(clock2));
+ sky130_fd_sc_hd__dlxtp_1 dft_lockup_2_1 (.D(output2),
+    .Q(dft_lockup_net_2_1),
+    .GATE(clock1));
+ sky130_fd_sc_hd__dlxtp_1 dft_lockup_3_1 (.D(output3),
+    .Q(dft_lockup_net_3_1),
+    .GATE(clock2));
+ sky130_fd_sc_hd__dlxtp_1 dft_lockup_4_1 (.D(output4),
+    .Q(dft_lockup_net_4_1),
+    .GATE(clock1));
+ sky130_fd_sc_hd__dlxtp_1 dft_lockup_5_1 (.D(output20),
+    .Q(dft_lockup_net_5_1),
+    .GATE(clock1));
+ sky130_fd_sc_hd__dlxtp_1 dft_lockup_6_1 (.D(output11),
+    .Q(dft_lockup_net_6_1),
+    .GATE(clock2));
+ sky130_fd_sc_hd__dlxtp_1 dft_lockup_7_1 (.D(output12),
+    .Q(dft_lockup_net_7_1),
+    .GATE(clock1));
+ sky130_fd_sc_hd__dlxtp_1 dft_lockup_8_1 (.D(output13),
+    .Q(dft_lockup_net_8_1),
+    .GATE(clock2));
+ sky130_fd_sc_hd__dlxtp_1 dft_lockup_9_1 (.D(output14),
+    .Q(dft_lockup_net_9_1),
+    .GATE(clock1));
+ assign scan_out_0 = output5;
+ assign scan_out_1 = output6;
+ assign scan_out_2 = output7;
+ assign scan_out_3 = output8;
+ assign scan_out_4 = output9;
+ assign scan_out_5 = output15;
+ assign scan_out_6 = output16;
+ assign scan_out_7 = output17;
+ assign scan_out_8 = output18;
+ assign scan_out_9 = output19;
 endmodule

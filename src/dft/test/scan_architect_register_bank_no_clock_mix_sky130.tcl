@@ -10,7 +10,7 @@ link_design top
 create_clock -name clk1 -period 2.0000 -waveform {0.0000 1.0000} [get_ports {clk1}]
 create_clock -name clk2 -period 2.0000 -waveform {0.0000 1.0000} [get_ports {clk2}]
 
-set_dft_config -max_length 20000 -clock_mixing no_mix
+set_dft_config -max_length 20000 -clock_mixing no_mix -scan_order_solver ILS
 
 scan_replace
 report_dft_plan -verbose

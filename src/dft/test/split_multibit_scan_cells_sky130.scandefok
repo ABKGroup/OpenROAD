@@ -1,0 +1,18 @@
+VERSION 5.8 ;
+DIVIDERCHAR "/" ;
+BUSBITCHARS "[]" ;
+DESIGN split_multibit_scan_cells ;
+
+SCANCHAINS 1 ;
+
+- chain_0
++ START PIN scan_in_0
++ ORDERED
+  mbff1 ( IN SI1 ) ( OUT SO1 )
+  mbff1 ( IN SI0 ) ( OUT SO0 )
++ PARTITION default
++ STOP PIN scan_out_0 ;
+
+END SCANCHAINS
+
+END DESIGN

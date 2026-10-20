@@ -1,0 +1,19 @@
+VERSION 5.8 ;
+DIVIDERCHAR "/" ;
+BUSBITCHARS "[]" ;
+DESIGN scan_architect_no_mix_nangate45 ;
+
+SCANCHAINS 1 ;
+
+- chain_0
++ START PIN scan_in_0
++ ORDERED
+  ff3 ( IN SI ) ( OUT QN )
+  ff2 ( IN SI ) ( OUT QN )
+  ff1 ( IN SI ) ( OUT QN )
++ PARTITION default
++ STOP PIN scan_out_0 ;
+
+END SCANCHAINS
+
+END DESIGN

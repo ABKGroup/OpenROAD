@@ -27,6 +27,8 @@ Instance ff1
  Output pins:
   Q output output1
   Q_N output (unconnected)
+[WARNING DFT-0212] Scan constraints: endpoint port 'scan_in_0' not found; ignoring endpoint.
+[WARNING DFT-0212] Scan constraints: endpoint port 'scan_out_0' not found; ignoring endpoint.
 ***************************
 Report DFT Plan
 Number of chains: 1
@@ -51,6 +53,10 @@ Instance ff1
  Output pins:
   Q output output1
   Q_N output (unconnected)
+[WARNING DFT-0212] Scan constraints: endpoint port 'scan_in_0' not found; ignoring endpoint.
+[WARNING DFT-0212] Scan constraints: endpoint port 'scan_out_0' not found; ignoring endpoint.
+[WARNING DFT-0226] Scan chain 'chain_0' scan-in port 'scan_in_0' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
+[WARNING DFT-0230] Scan chain 'chain_0' scan-out port 'scan_out_0' has no pin location; begin/end cost and plots may be misleading (place pins or specify endpoint coordinates)
 Instance ff1
  Cell: sky130_fd_sc_hd__sdfsbp_1
  Library: sky130_fd_sc_hd_merged

@@ -1,0 +1,81 @@
+library(split_multibit_scan_cells_sky130) {
+  technology (cmos);
+  delay_model : table_lookup;
+  time_unit : "1ns";
+  voltage_unit : "1V";
+  current_unit : "1mA";
+  leakage_power_unit : "1mW";
+  capacitive_load_unit (1,pf);
+
+  operating_conditions(tt_1.0_25.0) {
+    process : 1;
+    temperature : 25.000;
+    voltage : 1.0;
+  }
+
+  default_operating_conditions : tt_1.0_25.0;
+
+  slew_derate_from_library : 1.000;
+  slew_lower_threshold_pct_fall : 10.000;
+  slew_upper_threshold_pct_fall : 90.000;
+  slew_lower_threshold_pct_rise : 10.000;
+  slew_upper_threshold_pct_rise : 90.000;
+  input_threshold_pct_fall : 50.000;
+  input_threshold_pct_rise : 50.000;
+  output_threshold_pct_fall : 50.000;
+  output_threshold_pct_rise : 50.000;
+
+  cell(dft_mbff2_scan) {
+    area : 1;
+
+    ff (IQ0, IQN0) {
+      clocked_on : "CLK";
+      next_state : "D0";
+    }
+
+    ff (IQ1, IQN1) {
+      clocked_on : "CLK";
+      next_state : "D1";
+    }
+
+    pin (CLK) {
+      direction : input;
+      clock : true;
+    }
+    pin (D0) {
+      direction : input;
+    }
+    pin (D1) {
+      direction : input;
+    }
+    pin (Q0) {
+      direction : output;
+      function : "IQ0";
+    }
+    pin (Q1) {
+      direction : output;
+      function : "IQ1";
+    }
+
+    pin (SE) {
+      direction : input;
+      scan_signal_type : enable;
+    }
+    pin (SI0) {
+      direction : input;
+      scan_signal_type : input;
+    }
+    pin (SI1) {
+      direction : input;
+      scan_signal_type : input;
+    }
+    pin (SO0) {
+      direction : output;
+      scan_signal_type : output;
+    }
+    pin (SO1) {
+      direction : output;
+      scan_signal_type : output;
+    }
+  }
+}

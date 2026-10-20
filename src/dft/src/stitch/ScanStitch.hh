@@ -13,6 +13,7 @@
 
 #include "ScanChain.hh"
 #include "ScanPin.hh"
+#include "ScanArchitectConfig.hh"
 #include "ScanStitchConfig.hh"
 #include "Utils.hh"
 #include "odb/db.h"
@@ -30,6 +31,7 @@ class ScanStitch
  public:
   explicit ScanStitch(odb::dbDatabase* db,
                       utl::Logger* logger,
+                      const ScanArchitectConfig& architect_config,
                       const ScanStitchConfig& config);
 
   // Stitch one or more scan chains.
@@ -39,7 +41,10 @@ class ScanStitch
   // - Ordinals are used with scan in/out/enable name patterns to produce the
   // - final name for the signal(s) in question. Enable ordinal is different
   // - to account for whether you're using global or per-chain enable.
-  void Stitch(odb::dbBlock* block, ScanChain& scan_chain, size_t ordinal = 0);
+  void Stitch(odb::dbBlock* block,
+              ScanChain& scan_chain,
+              size_t ordinal = 0,
+              bool warn_on_missing_pattern_ports = false);
 
  private:
   ScanDriver FindOrCreateDriver(std::string_view kind,
@@ -72,6 +77,7 @@ class ScanStitch
     return Port(port);
   }
 
+  const ScanArchitectConfig& architect_config_;
   const ScanStitchConfig& config_;
   odb::dbDatabase* db_;
   utl::Logger* logger_;
