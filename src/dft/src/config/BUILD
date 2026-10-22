@@ -25,7 +25,7 @@ cc_library(
         ".",
     ],
     deps = [
-        "//src/dft/src/utils",
+        "//src/dft/src/utils:formatting",
         "//src/utl",
     ],
 )

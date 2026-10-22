@@ -108,7 +108,7 @@ The command `set_dft_config` sets the DFT configuration variables.
 | `-timing_buffer_in_pin` | Timing buffer input pin name. |
 | `-timing_buffer_out_pin` | Timing buffer output pin name. |
 
-### Scan Ordering Constraints File
+#### Scan Ordering Constraints File
 
 The constraints file allows naming chains, defining per-chain begin/end points, and
 expressing “ScanOpt-style” constraints such as grouping (contiguity), strict subpaths,
@@ -173,6 +173,22 @@ report_dft_plan
 | ---- | ---- |
 | `-verbose` | Shows more information about each one of the scan chains that will be created. |
 
+### Report DFT Plan Pins
+
+Prints a preview of the scan chains along with the specific scan-in and scan-out pins
+and wirelength statistics for each chain. This command does not modify the design.
+
+```tcl
+report_dft_plan_pins
+    [-verbose]
+```
+
+#### Options
+
+| Switch Name | Description |
+| ---- | ---- |
+| `-verbose` | Shows the ordered scan cell pin-to-pin connections for each scan chain. |
+
 ### Execute DFT Plan
 
 Architect scan chains and connect them up in a way that minimises wirelength. As
@@ -182,14 +198,32 @@ a result, this should be run after placement, and after `scan_replace`.
 execute_dft_plan
 ```
 
+### Buffer Scan Enable
+
+Inserts a simple fanout-limiting buffer tree on scan-enable nets driven by top-level
+ports or internal drivers after scan stitching.
+
+```tcl
+buffer_scan_enable
+    -buffer_cell <string>
+    [-max_fanout <int>]
+    [-max_levels <int>]
+```
+
+#### Options
+
+| Switch Name | Description |
+| ---- | ---- |
+| `-buffer_cell` | Library buffer cell name to insert on scan-enable nets. |
+| `-max_fanout` | Maximum fanout per buffer stage (default `64`). |
+| `-max_levels` | Maximum buffer tree depth (default `3`). |
+
 ### Write SCANDEF
 
 Writes a DEF-style `SCANCHAINS` section (often called “SCANDEF”) describing the
 stitched scan chains. This uses the scan chain objects stored in ODB by
 `execute_dft_plan`.
 
-**Note: This is currently not implemented and this command currently operates as a
-nop.**
 ```tcl
 write_scandef -file <path>
 ```

@@ -24,6 +24,7 @@ cc_library(
     ],
     deps = [
         "//src/dbSta",
+        "//src/dbSta:dbNetwork",
         "//src/dft/src/architect",
         "//src/dft/src/cells",
         "//src/dft/src/clock_domain",
@@ -31,8 +32,10 @@ cc_library(
         "//src/dft/src/replace",
         "//src/dft/src/stitch",
         "//src/dft/src/utils",
+        "//src/dft/src/ucla_scanopt",
         "//src/odb/src/db",
         "//src/rsz",
+        "//src/sta:opensta_lib",
         "//src/utl",
         "@boost.property_tree",
     ],

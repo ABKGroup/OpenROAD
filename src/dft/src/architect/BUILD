@@ -31,8 +31,11 @@ cc_library(
         "//src/dft/src/clock_domain",
         "//src/dft/src/config",
         "//src/dft/src/utils",
+        "//src/dft/src/ucla_scanopt",
+        "//src/odb/src/db",
         "//src/utl",
         "@boost.geometry",
+        "@spdlog",
     ],
 )
 

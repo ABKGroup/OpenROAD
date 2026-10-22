@@ -264,4 +264,9 @@ class dbSta : public Sta, public odb::dbDatabaseObserver
   bool drvr_vertices_level_valid_ = false;
 };
 
+// Utilities for TestCell / scan ports
+sta::LibertyPort* getLibertyScanEnable(const LibertyCell* lib_cell);
+sta::LibertyPort* getLibertyScanIn(const LibertyCell* lib_cell);
+sta::LibertyPort* getLibertyScanOut(const LibertyCell* lib_cell);
+
 }  // namespace sta

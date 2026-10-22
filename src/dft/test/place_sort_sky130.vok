@@ -92,11 +92,5 @@ module place_sort (clock,
     .SCE(scan_enable_0),
     .SET_B(set_b),
     .CLK(clock));
- sky130_fd_sc_hd__sdfsbp_1 ff10_clk1_rising (.D(port1),
-    .Q(output10),
-    .SCD(output1),
-    .SCE(scan_enable_0),
-    .SET_B(set_b),
-    .CLK(clock));
  assign scan_out_0 = output3;
 endmodule

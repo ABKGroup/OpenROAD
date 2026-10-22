@@ -1533,8 +1533,34 @@ void dbStaCbk::inDbModBTermPreDisconnect(odb::dbModBTerm* modbterm)
 
 ////////////////////////////////////////////////////////////////
 
+namespace {
+void syncTestCellScanSignalTypes(const sta::LibertyCell* lib_cell)
+{
+  if (lib_cell == nullptr) {
+    return;
+  }
+  const sta::TestCell* test_cell = lib_cell->testCell();
+  if (test_cell == nullptr) {
+    return;
+  }
+  sta::LibertyCellPortIterator port_iter(lib_cell);
+  while (port_iter.hasNext()) {
+    sta::LibertyPort* port = port_iter.next();
+    if (port->scanSignalType() == sta::ScanSignalType::none) {
+      if (const sta::LibertyPort* test_port
+          = test_cell->findLibertyPort(port->name())) {
+        if (test_port->scanSignalType() != sta::ScanSignalType::none) {
+          port->setScanSignalType(test_port->scanSignalType());
+        }
+      }
+    }
+  }
+}
+}  // namespace
+
 sta::LibertyPort* getLibertyScanEnable(const sta::LibertyCell* lib_cell)
 {
+  syncTestCellScanSignalTypes(lib_cell);
   sta::LibertyCellPortIterator iter(lib_cell);
   while (iter.hasNext()) {
     sta::LibertyPort* port = iter.next();
@@ -1545,31 +1571,30 @@ sta::LibertyPort* getLibertyScanEnable(const sta::LibertyCell* lib_cell)
     }
   }
 
-  auto equals_ignore_case = [](const char* lhs, const char* rhs) -> bool {
-    if (lhs == nullptr || rhs == nullptr) {
+  auto equals_ignore_case
+      = [](std::string_view lhs, std::string_view rhs) -> bool {
+    if (lhs.size() != rhs.size()) {
       return false;
     }
-    while (*lhs != '\0' && *rhs != '\0') {
-      if (std::tolower(static_cast<unsigned char>(*lhs))
-          != std::tolower(static_cast<unsigned char>(*rhs))) {
+    for (std::size_t i = 0; i < lhs.size(); ++i) {
+      if (std::tolower(static_cast<unsigned char>(lhs[i]))
+          != std::tolower(static_cast<unsigned char>(rhs[i]))) {
         return false;
       }
-      lhs++;
-      rhs++;
     }
-    return *lhs == '\0' && *rhs == '\0';
+    return true;
   };
 
   auto matches_prefix_or_exact_ignore_case =
-      [&](const char* name, const char* prefix) -> bool {
+      [&](std::string_view name, std::string_view prefix) -> bool {
     if (equals_ignore_case(name, prefix)) {
       return true;
     }
-    if (name == nullptr || prefix == nullptr) {
+    if (name.empty() || prefix.empty()) {
       return false;
     }
-    const std::size_t n = std::strlen(name);
-    const std::size_t p = std::strlen(prefix);
+    const std::size_t n = name.size();
+    const std::size_t p = prefix.size();
     if (n <= p) {
       return false;
     }
@@ -1596,8 +1621,8 @@ sta::LibertyPort* getLibertyScanEnable(const sta::LibertyCell* lib_cell)
   sta::LibertyPort* found = nullptr;
   while (pin_iter.hasNext()) {
     sta::LibertyPort* port = pin_iter.next();
-    const char* port_name = port->name();
-    for (const char* candidate :
+    const std::string& port_name = port->name();
+    for (std::string_view candidate :
          {"SE", "SCE", "SCAN_EN", "SCAN_ENABLE", "SCANENABLE"}) {
       if (matches_prefix_or_exact_ignore_case(port_name, candidate)) {
         if (port->scanSignalType() == sta::ScanSignalType::none) {
@@ -1615,6 +1640,7 @@ sta::LibertyPort* getLibertyScanEnable(const sta::LibertyCell* lib_cell)
 
 sta::LibertyPort* getLibertyScanIn(const sta::LibertyCell* lib_cell)
 {
+  syncTestCellScanSignalTypes(lib_cell);
   sta::LibertyCellPortIterator iter(lib_cell);
   while (iter.hasNext()) {
     sta::LibertyPort* port = iter.next();
@@ -1625,31 +1651,30 @@ sta::LibertyPort* getLibertyScanIn(const sta::LibertyCell* lib_cell)
     }
   }
 
-  auto equals_ignore_case = [](const char* lhs, const char* rhs) -> bool {
-    if (lhs == nullptr || rhs == nullptr) {
+  auto equals_ignore_case
+      = [](std::string_view lhs, std::string_view rhs) -> bool {
+    if (lhs.size() != rhs.size()) {
       return false;
     }
-    while (*lhs != '\0' && *rhs != '\0') {
-      if (std::tolower(static_cast<unsigned char>(*lhs))
-          != std::tolower(static_cast<unsigned char>(*rhs))) {
+    for (std::size_t i = 0; i < lhs.size(); ++i) {
+      if (std::tolower(static_cast<unsigned char>(lhs[i]))
+          != std::tolower(static_cast<unsigned char>(rhs[i]))) {
         return false;
       }
-      lhs++;
-      rhs++;
     }
-    return *lhs == '\0' && *rhs == '\0';
+    return true;
   };
 
   auto matches_prefix_or_exact_ignore_case =
-      [&](const char* name, const char* prefix) -> bool {
+      [&](std::string_view name, std::string_view prefix) -> bool {
     if (equals_ignore_case(name, prefix)) {
       return true;
     }
-    if (name == nullptr || prefix == nullptr) {
+    if (name.empty() || prefix.empty()) {
       return false;
     }
-    const std::size_t n = std::strlen(name);
-    const std::size_t p = std::strlen(prefix);
+    const std::size_t n = name.size();
+    const std::size_t p = prefix.size();
     if (n <= p) {
       return false;
     }
@@ -1676,8 +1701,8 @@ sta::LibertyPort* getLibertyScanIn(const sta::LibertyCell* lib_cell)
   sta::LibertyPort* found = nullptr;
   while (pin_iter.hasNext()) {
     sta::LibertyPort* port = pin_iter.next();
-    const char* port_name = port->name();
-    for (const char* candidate : {"SI", "SCD", "SCAN_IN", "SCANIN"}) {
+    const std::string& port_name = port->name();
+    for (std::string_view candidate : {"SI", "SCD", "SCAN_IN", "SCANIN"}) {
       if (matches_prefix_or_exact_ignore_case(port_name, candidate)) {
         if (port->scanSignalType() == sta::ScanSignalType::none) {
           port->setScanSignalType(sta::ScanSignalType::input);
@@ -1694,6 +1719,7 @@ sta::LibertyPort* getLibertyScanIn(const sta::LibertyCell* lib_cell)
 
 sta::LibertyPort* getLibertyScanOut(const sta::LibertyCell* lib_cell)
 {
+  syncTestCellScanSignalTypes(lib_cell);
   sta::LibertyCellPortIterator iter(lib_cell);
   while (iter.hasNext()) {
     sta::LibertyPort* port = iter.next();
@@ -1704,31 +1730,30 @@ sta::LibertyPort* getLibertyScanOut(const sta::LibertyCell* lib_cell)
     }
   }
 
-  auto equals_ignore_case = [](const char* lhs, const char* rhs) -> bool {
-    if (lhs == nullptr || rhs == nullptr) {
+  auto equals_ignore_case
+      = [](std::string_view lhs, std::string_view rhs) -> bool {
+    if (lhs.size() != rhs.size()) {
       return false;
     }
-    while (*lhs != '\0' && *rhs != '\0') {
-      if (std::tolower(static_cast<unsigned char>(*lhs))
-          != std::tolower(static_cast<unsigned char>(*rhs))) {
+    for (std::size_t i = 0; i < lhs.size(); ++i) {
+      if (std::tolower(static_cast<unsigned char>(lhs[i]))
+          != std::tolower(static_cast<unsigned char>(rhs[i]))) {
         return false;
       }
-      lhs++;
-      rhs++;
     }
-    return *lhs == '\0' && *rhs == '\0';
+    return true;
   };
 
   auto matches_prefix_or_exact_ignore_case =
-      [&](const char* name, const char* prefix) -> bool {
+      [&](std::string_view name, std::string_view prefix) -> bool {
     if (equals_ignore_case(name, prefix)) {
       return true;
     }
-    if (name == nullptr || prefix == nullptr) {
+    if (name.empty() || prefix.empty()) {
       return false;
     }
-    const std::size_t n = std::strlen(name);
-    const std::size_t p = std::strlen(prefix);
+    const std::size_t n = name.size();
+    const std::size_t p = prefix.size();
     if (n <= p) {
       return false;
     }
@@ -1755,8 +1780,8 @@ sta::LibertyPort* getLibertyScanOut(const sta::LibertyCell* lib_cell)
   sta::LibertyPort* found = nullptr;
   while (pin_iter.hasNext()) {
     sta::LibertyPort* port = pin_iter.next();
-    const char* port_name = port->name();
-    for (const char* candidate : {"SO", "SCO", "SCAN_OUT", "SCANOUT"}) {
+    const std::string& port_name = port->name();
+    for (std::string_view candidate : {"SO", "SCO", "SCAN_OUT", "SCANOUT"}) {
       if (matches_prefix_or_exact_ignore_case(port_name, candidate)) {
         if (port->scanSignalType() == sta::ScanSignalType::none) {
           port->setScanSignalType(sta::ScanSignalType::output);

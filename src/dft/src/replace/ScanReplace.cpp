@@ -48,12 +48,6 @@ bool IsLikelyScanPortName(const char* name)
          || strcasecmp(name, "SCANOUT") == 0;
 }
 
-bool IsPgPort(const sta::LibertyPort* port)
-{
-  const sta::PortDirection* dir = port != nullptr ? port->direction() : nullptr;
-  return dir != nullptr && dir->isPowerGround();
-}
-
 // Checks the ports
 sta::LibertyPort* FindEquivalentPortInScanCell(
     const sta::LibertyPort* non_scan_cell_port,
@@ -166,7 +160,7 @@ bool IsScanEquivalent(
       continue;
     }
     // Fall back to common pin names when scan metadata is missing.
-    if (IsLikelyScanPortName(scan_cell_port->name())) {
+    if (IsLikelyScanPortName(scan_cell_port->name().c_str())) {
       continue;
     }
     return false;
@@ -312,7 +306,7 @@ void ScanReplace::collectScanCellAvailable()
         continue;
       }
 
-      if (utils::IsScanCell(db_network, liberty_cell)) {
+      if (utils::IsScanCell(liberty_cell)) {
         if (resizer_ && resizer_->dontUse(liberty_cell)) {
           continue;
         }

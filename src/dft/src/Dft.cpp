@@ -168,11 +168,11 @@ odb::dbITerm* inferScanEnableITerm(odb::dbInst* inst, sta::dbSta* sta)
   }
 
   sta::LibertyPort* se_port = sta::getLibertyScanEnable(liberty_cell);
-  if (se_port == nullptr || se_port->name() == nullptr) {
+  if (se_port == nullptr || se_port->name().empty()) {
     return nullptr;
   }
 
-  return inst->findITerm(se_port->name());
+  return inst->findITerm(se_port->name().c_str());
 }
 
 bool isClockGateInstance(odb::dbInst* inst, sta::dbNetwork* db_network)
@@ -1332,7 +1332,7 @@ std::vector<std::unique_ptr<ScanChain>> Dft::scanArchitectFromDb()
             // infer a better bit count from Liberty when possible. Keep 0 for
             // stateless components.
             if (sta::LibertyCell* liberty_cell = getLibertyCell(inst, db_network);
-                liberty_cell != nullptr && liberty_cell->hasSequentials()
+                liberty_cell != nullptr && liberty_cell->isSequential()
                 && sta::getLibertyScanIn(liberty_cell) != nullptr
                 && sta::getLibertyScanEnable(liberty_cell) != nullptr) {
               const sta::SequentialSeq& sequentials = liberty_cell->sequentials();

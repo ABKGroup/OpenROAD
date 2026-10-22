@@ -17,8 +17,6 @@
 #include "ClockDomain.hh"
 #include "OneBitScanCell.hh"
 #include "ScanCell.hh"
-#include "OneBitScanCell.hh"
-#include "ScanCell.hh"
 #include "Utils.hh"
 #include "db_sta/dbNetwork.hh"
 #include "db_sta/dbSta.hh"
@@ -65,11 +63,6 @@ bool HasPrefixIgnoreCase(const char* name, std::string_view prefix)
 {
   if (name == nullptr) {
     return false;
-  }
-  sta::TestCell* test_cell = liberty_cell->testCell();
-  if (test_cell && db_network->getLibertyScanIn(test_cell) != nullptr
-      && db_network->getLibertyScanEnable(test_cell) != nullptr) {
-    return test_cell;
   }
   const std::size_t n = std::strlen(name);
   if (n < prefix.size()) {
@@ -164,7 +157,7 @@ std::vector<sta::LibertyPort*> CollectScanPortsByNameFallback(
     if (port == nullptr) {
       continue;
     }
-    const char* port_name = port->name();
+    const char* port_name = port->name().c_str();
     for (const auto& prefix : prefixes) {
       if (MatchesScanPrefix(port_name, prefix) || EqualsIgnoreCase(port_name, prefix)) {
         if (port->scanSignalType() == sta::ScanSignalType::none) {
@@ -181,8 +174,8 @@ std::vector<sta::LibertyPort*> CollectScanPortsByNameFallback(
 void SortScanPorts(std::vector<sta::LibertyPort*>& ports)
 {
   std::stable_sort(ports.begin(), ports.end(), [](sta::LibertyPort* a, sta::LibertyPort* b) {
-    const char* a_name = a ? a->name() : nullptr;
-    const char* b_name = b ? b->name() : nullptr;
+    const char* a_name = a ? a->name().c_str() : nullptr;
+    const char* b_name = b ? b->name().c_str() : nullptr;
     const int a_idx = ExtractPortIndex(a_name);
     const int b_idx = ExtractPortIndex(b_name);
     if (a_idx >= 0 && b_idx >= 0 && a_idx != b_idx) {
@@ -194,8 +187,8 @@ void SortScanPorts(std::vector<sta::LibertyPort*>& ports)
     if (a_idx < 0 && b_idx >= 0) {
       return false;
     }
-    const std::string_view as = a_name ? std::string_view(a_name) : std::string_view();
-    const std::string_view bs = b_name ? std::string_view(b_name) : std::string_view();
+    const std::string_view as = a ? std::string_view(a->name()) : std::string_view();
+    const std::string_view bs = b ? std::string_view(b->name()) : std::string_view();
     return as < bs;
   });
 }

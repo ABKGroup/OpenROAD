@@ -51,7 +51,7 @@
 */ 
 
 #ifndef _PARAMPROC_H_
-#define _PARAMPROC_H__
+#define _PARAMPROC_H_
 
 #include <stdlib.h>
 #include <iostream.h>
@@ -108,7 +108,7 @@ public:
      NoParams(int argc, const char * const argv[]):Param(Param::NOPARAM,argc,argv) {}
      bool found()    const { return Param::found(); }
      operator bool() const { return Param::found(); }
-     Param::on;      // base class member access adjustment
+     using Param::on;      // base class member access adjustment
 };
 
 //: Catches a given boolean parameter
@@ -119,7 +119,7 @@ public:
     : Param(key,Param::BOOL,argc,argv) {}
     bool found() const    { return Param::found(); }
     operator bool() const { return Param::found(); }
-    Param::on;      // base class member access adjustment
+    using Param::on;      // base class member access adjustment
 };
 
 //: Catches a given Unsigned parameter
@@ -130,7 +130,7 @@ public:
     : Param(key,Param::UNSIGNED,argc,argv) {}
     bool found() const { return Param::found() && getUnsigned()!=unsigned(-1); }
     operator unsigned() const { return getUnsigned();  }
-    Param::on;     // base class member access adjustment
+    using Param::on;     // base class member access adjustment
 };
 
 //: Catches a given integer parameter
@@ -141,7 +141,7 @@ public:
     : Param(key,Param::INT,argc,argv) {}
     bool found()   const { return Param::found();   }
     operator int() const { return getInt();  }
-    Param::on;      // base class member access adjustment
+    using Param::on;      // base class member access adjustment
 };
 
 //: Catches a given double parameter
@@ -152,7 +152,7 @@ public:
     : Param(key,Param::DOUBLE,argc,argv) {}
     bool found() const { return Param::found() && getDouble()!=-1.29384756657; }
     operator double() const { return getDouble();  }
-    Param::on;      // base class member access adjustment
+    using Param::on;      // base class member access adjustment
 };
 
 //: Catches a given string parameter
@@ -164,7 +164,7 @@ public:
     bool found()     const       
           { return Param::found() && strcmp(getString(),"Uninitialized"); }
     operator const char*() const  { return getString();  }
-    Param::on;      // base class member access adjustment
+    using Param::on;      // base class member access adjustment
 };
 
 #endif

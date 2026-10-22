@@ -16,5 +16,5 @@ report_dft_plan -verbose
 execute_dft_plan
 
 set verilog_file [make_result_file scan_architect_no_mix_nangate45.v]
-write_verilog -sort $verilog_file
+write_verilog $verilog_file
 diff_files $verilog_file scan_architect_no_mix_nangate45.vok

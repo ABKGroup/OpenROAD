@@ -148,31 +148,31 @@ ScanTourDZ::_random3Opt(vector<unsigned> &oldPath)
                 temp = perm[i];  perm[i] = perm[i+1];  perm[i+1] = temp;
             }
             
-            t1 = perm[0];  t2 = t1+1;
-            t3 = perm[1];  t4 = t3+1;
-            t5 = perm[2];  t6 = (t5+1)%_n;
-            
-            for (i=0; i<=t1; i++)
-                _path[i] = oldPath[i];
-            j = t1+1;
-            for (i=t4; i<=t5; i++) {
-                _path[j] = oldPath[i];
-                j++;
-            }
-            for (i=t2; i<=t3; i++) {
-                _path[j] = oldPath[i];
-                j++;
-            }
-            if (t6>0)
-                for (i=t6; i<_n; i++) {
-                    _path[j] = oldPath[i];
-                    j++;
-                }
-                
-                
-                computeInverse();
-                
-                abkfatal2(j==_n,"wrong # nodes in 3-opt tour = ",j);
+    t1 = perm[0];  t2 = t1+1;
+    t3 = perm[1];  t4 = t3+1;
+    t5 = perm[2];  t6 = (t5+1)%_n;
+    
+    for (i=0; i<=t1; i++)
+        _path[i] = oldPath[i];
+    j = t1+1;
+    for (i=t4; i<=t5; i++) {
+        _path[j] = oldPath[i];
+        j++;
+    }
+    for (i=t2; i<=t3; i++) {
+        _path[j] = oldPath[i];
+        j++;
+    }
+    if (t6>0)
+        for (i=t6; i<_n; i++) {
+            _path[j] = oldPath[i];
+            j++;
+        }
+        
+        
+    computeInverse();
+        
+    abkfatal2(j==_n,"wrong # nodes in 3-opt tour = ",j);
                 
 } /* random3Opt() */
 /*************************************************************/
@@ -201,36 +201,36 @@ ScanTourDZ::_random4Opt(vector<unsigned> &oldPath)		/* double bridge */
                 temp = perm[i];  perm[i] = perm[i+1];  perm[i+1] = temp;
             }
             
-            t1 = perm[0];  t2 = t1+1;
-            t3 = perm[1];  t4 = t3+1;
-            t5 = perm[2];  t6 = t5+1;
-            t7 = perm[3];  t8 = (t7+1)%_n;
-            
-            for (i=0; i<=t1; i++)
-                _path[i] = oldPath[i];
-            j = t1+1;
-            for (i=t6; i<=t7; i++) {
-                _path[j] = oldPath[i];
-                j++;
-            }
-            for (i=t4; i<=t5; i++) {
-                _path[j] = oldPath[i];
-                j++;
-            }
-            for (i=t2; i<=t3; i++) {
-                _path[j] = oldPath[i];
-                j++;
-            }
-            if (t8>0) 
-                for (i=t8; i<_n; i++) {
-                    _path[j] = oldPath[i];
-                    j++;
-                }
-                
-                
-                computeInverse();
-                
-                abkfatal2(j==_n,"wrong # nodes in 4-opt tour = ",j);
+    t1 = perm[0];  t2 = t1+1;
+    t3 = perm[1];  t4 = t3+1;
+    t5 = perm[2];  t6 = t5+1;
+    t7 = perm[3];  t8 = (t7+1)%_n;
+    
+    for (i=0; i<=t1; i++)
+        _path[i] = oldPath[i];
+    j = t1+1;
+    for (i=t6; i<=t7; i++) {
+        _path[j] = oldPath[i];
+        j++;
+    }
+    for (i=t4; i<=t5; i++) {
+        _path[j] = oldPath[i];
+        j++;
+    }
+    for (i=t2; i<=t3; i++) {
+        _path[j] = oldPath[i];
+        j++;
+    }
+    if (t8>0) 
+        for (i=t8; i<_n; i++) {
+            _path[j] = oldPath[i];
+            j++;
+        }
+    
+    
+    computeInverse();
+    
+    abkfatal2(j==_n,"wrong # nodes in 4-opt tour = ",j);
                 
 } /* random4Opt() */
 /*************************************************************/
@@ -259,40 +259,40 @@ ScanTourDZ::_random5Opt(vector<unsigned> &oldPath)
                 temp = perm[i];  perm[i] = perm[i+1];  perm[i+1] = temp;
             }
             
-            t1 = perm[0];  t2 = t1+1;
-            t3 = perm[1];  t4 = t3+1;
-            t5 = perm[2];  t6 = t5+1;
-            t7 = perm[3];  t8 = t7+1;
-            t9 = perm[4];  t10 = (t9 + 1)%_n;
-            
-            for (i=0; i<=t1; i++)
-                _path[i] = oldPath[i];
-            j = t1+1;
-            for (i=t6; i<=t7; i++) {
-                _path[j] = oldPath[i];
-                j++;
-            }
-            for (i=t2; i<=t3; i++) {
-                _path[j] = oldPath[i];
-                j++;
-            }
-            for (i=t8; i<=t9; i++) {
-                _path[j] = oldPath[i];
-                j++;
-            }
-            for (i=t4; i<=t5; i++) {
-                _path[j] = oldPath[i];
-                j++;
-            }
-            if (t10>0) 
-                for (i=t10; i<_n; i++) {
-                    _path[j] = oldPath[i];
-                    j++;
-                }
-                
-                computeInverse();
-                
-                abkfatal2(j==_n,"wrong # nodes in 5-opt tour = ",j);
+    t1 = perm[0];  t2 = t1+1;
+    t3 = perm[1];  t4 = t3+1;
+    t5 = perm[2];  t6 = t5+1;
+    t7 = perm[3];  t8 = t7+1;
+    t9 = perm[4];  t10 = (t9 + 1)%_n;
+    
+    for (i=0; i<=t1; i++)
+        _path[i] = oldPath[i];
+    j = t1+1;
+    for (i=t6; i<=t7; i++) {
+        _path[j] = oldPath[i];
+        j++;
+    }
+    for (i=t2; i<=t3; i++) {
+        _path[j] = oldPath[i];
+        j++;
+    }
+    for (i=t8; i<=t9; i++) {
+        _path[j] = oldPath[i];
+        j++;
+    }
+    for (i=t4; i<=t5; i++) {
+        _path[j] = oldPath[i];
+        j++;
+    }
+    if (t10>0) 
+        for (i=t10; i<_n; i++) {
+            _path[j] = oldPath[i];
+            j++;
+        }
+        
+        computeInverse();
+        
+        abkfatal2(j==_n,"wrong # nodes in 5-opt tour = ",j);
                 
 } /* random5Opt() */
 /*************************************************************/
@@ -321,47 +321,47 @@ ScanTourDZ::_random6Opt(vector<unsigned> &oldPath)
                 temp = perm[i];  perm[i] = perm[i+1];  perm[i+1] = temp;
             }
             
-            t1 = perm[0];  t2 = t1+1;
-            t3 = perm[1];  t4 = t3+1;
-            t5 = perm[2];  t6 = t5+1;
-            t7 = perm[3];  t8 = t7+1;
-            t9 = perm[4];  t10 = t9 + 1;
-            t11 = perm[5]; t12 = (t11 + 1)%_n; 
-            
-            for (i=0; i<=t1; i++)
-                _path[i] = oldPath[i];
-            j = t1+1;
-            for (i=t8; i<=t9; i++) {
-                _path[j] = oldPath[i];
-                j++;
-            }
-            for (i=t4; i<=t5; i++) {
-                _path[j] = oldPath[i];
-                j++;
-            }
-            for (i=t10; i<=t11; i++) {
-                _path[j] = oldPath[i];
-                j++;
-            }
-            for (i=t2; i<=t3; i++) {
-                _path[j] = oldPath[i];
-                j++;
-            }
-            
-            for (i=t6; i<=t7; i++) {
-                _path[j] = oldPath[i];
-                j++;
-            }
-            if (t12>0)
-                for (i=t12; i<_n; i++) {
-                    _path[j] = oldPath[i];
-                    j++;
-                }
-                
-                
-                computeInverse();
-                
-                abkfatal2(j==_n,"wrong # nodes in 3-opt tour = ",j);
+    t1 = perm[0];  t2 = t1+1;
+    t3 = perm[1];  t4 = t3+1;
+    t5 = perm[2];  t6 = t5+1;
+    t7 = perm[3];  t8 = t7+1;
+    t9 = perm[4];  t10 = t9 + 1;
+    t11 = perm[5]; t12 = (t11 + 1)%_n; 
+    
+    for (i=0; i<=t1; i++)
+        _path[i] = oldPath[i];
+    j = t1+1;
+    for (i=t8; i<=t9; i++) {
+        _path[j] = oldPath[i];
+        j++;
+    }
+    for (i=t4; i<=t5; i++) {
+        _path[j] = oldPath[i];
+        j++;
+    }
+    for (i=t10; i<=t11; i++) {
+        _path[j] = oldPath[i];
+        j++;
+    }
+    for (i=t2; i<=t3; i++) {
+        _path[j] = oldPath[i];
+        j++;
+    }
+    
+    for (i=t6; i<=t7; i++) {
+        _path[j] = oldPath[i];
+        j++;
+    }
+    if (t12>0)
+        for (i=t12; i<_n; i++) {
+            _path[j] = oldPath[i];
+            j++;
+        }
+        
+        
+        computeInverse();
+        
+        abkfatal2(j==_n,"wrong # nodes in 3-opt tour = ",j);
                 
 } /* random6Opt() */
 /*************************************************************/

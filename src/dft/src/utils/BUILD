@@ -10,14 +10,29 @@ package(
 )
 
 cc_library(
+    name = "formatting",
+    hdrs = [
+        "Formatting.hh",
+    ],
+    includes = [
+        ".",
+    ],
+    deps = [
+        "@spdlog",
+    ],
+)
+
+cc_library(
     name = "utils",
     srcs = [
         "ScanPin.cpp",
+        "ShiftRegister.cpp",
         "Utils.cpp",
     ],
     hdrs = [
         "Formatting.hh",
         "ScanPin.hh",
+        "ShiftRegister.hh",
         "Utils.hh",
     ],
     includes = [
@@ -26,6 +41,7 @@ cc_library(
     deps = [
         "//src/dbSta",
         "//src/dbSta:dbNetwork",
+        "//src/dft/src/config",
         "//src/odb/src/db",
         "//src/sta:opensta_lib",
         "//src/utl",

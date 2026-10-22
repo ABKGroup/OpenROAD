@@ -1061,11 +1061,16 @@ double ScanTourDZ::scoOptAll()
                     printf("dCost %f temp %f tRand %f tVal %f\n",
                         dCost, _optParams.temperature, tRand, tVal);
                 }
-                else
-                    _path=savedTour;_inverseValid=false;
+                else {// WOW IS THIS A BUG???
+                    _path=savedTour;
+                    _inverseValid=false;
+                }
             }
-            else
-                _path=savedTour;_inverseValid=false;
+            else // WOW IS THIS A BUG??? 
+            {
+                _path=savedTour;
+                _inverseValid=false;
+            }
         }
         
         if (cost < bsfCost) 

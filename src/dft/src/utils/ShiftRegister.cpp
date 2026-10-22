@@ -51,7 +51,7 @@ bool isEligibleSequential(odb::dbInst* inst,
   if (liberty_cell == nullptr) {
     return false;
   }
-  if (!liberty_cell->hasSequentials() || liberty_cell->isClockGate()) {
+  if (!liberty_cell->isSequential() || liberty_cell->isClockGate()) {
     return false;
   }
   return true;
@@ -94,7 +94,7 @@ std::optional<SeqNode> makeSeqNode(odb::dbInst* inst,
     return std::nullopt;
   }
 
-  odb::dbITerm* data_iterm = inst->findITerm(data_port->name());
+  odb::dbITerm* data_iterm = inst->findITerm(data_port->name().c_str());
   if (data_iterm == nullptr) {
     return std::nullopt;
   }
@@ -108,7 +108,7 @@ std::optional<SeqNode> makeSeqNode(odb::dbInst* inst,
     if (port == nullptr) {
       return nullptr;
     }
-    odb::dbITerm* iterm = inst->findITerm(port->name());
+    odb::dbITerm* iterm = inst->findITerm(port->name().c_str());
     return iterm != nullptr ? iterm->getNet() : nullptr;
   };
 
@@ -152,7 +152,7 @@ std::optional<SeqNode> makeSeqNode(odb::dbInst* inst,
   if (clk_port == nullptr) {
     return std::nullopt;
   }
-  odb::dbITerm* clk_iterm = inst->findITerm(clk_port->name());
+  odb::dbITerm* clk_iterm = inst->findITerm(clk_port->name().c_str());
   if (clk_iterm == nullptr) {
     return std::nullopt;
   }

@@ -43,16 +43,17 @@ uint64_t OneBitScanCell::getBits() const
   return bits_;
 }
 
+
 void OneBitScanCell::connectScanEnable(const ScanDriver& driver) const
 {
-  Connect(ScanLoad(findITerm(db_network_->getLibertyScanEnable(test_cell_))),
+  Connect(ScanLoad(findITerm(scan_enable_port_)),
           driver,
           /*preserve=*/false);
 }
 
 void OneBitScanCell::connectScanIn(const ScanDriver& driver) const
 {
-  Connect(ScanLoad(findITerm(db_network_->getLibertyScanIn(test_cell_))),
+  Connect(ScanLoad(findITerm(scan_in_port_)),
           driver,
           /*preserve=*/false);
 }
@@ -62,23 +63,28 @@ void OneBitScanCell::connectScanOut(const ScanLoad& load) const
   // The scan out usually will be connected to functional data paths already, we
   // need to preserve the connections
   Connect(load,
-          ScanDriver(findITerm(db_network_->getLibertyScanOut(test_cell_))),
+          ScanDriver(findITerm(scan_out_port_)),
           /*preserve=*/true);
 }
 
 ScanLoad OneBitScanCell::getScanEnable() const
 {
-  return ScanLoad(findITerm(db_network_->getLibertyScanEnable(test_cell_)));
+  return ScanLoad(findITerm(scan_enable_port_));
 }
 
 ScanDriver OneBitScanCell::getScanOut() const
 {
-  return ScanDriver(findITerm(db_network_->getLibertyScanOut(test_cell_)));
+  return ScanDriver(findITerm(scan_out_port_));
 }
 
 ScanLoad OneBitScanCell::getScanIn() const
 {
-  return ScanLoad(findITerm(db_network_->getLibertyScanIn(test_cell_)));
+  return ScanLoad(findITerm(scan_in_port_));
+}
+
+odb::dbInst* OneBitScanCell::getDbInst() const
+{
+  return inst_;
 }
 
 odb::dbITerm* OneBitScanCell::findITerm(sta::LibertyPort* liberty_port) const
@@ -91,9 +97,9 @@ odb::dbITerm* OneBitScanCell::findITerm(sta::LibertyPort* liberty_port) const
   // Prefer name-based lookup on the instance. This is more robust than relying
   // on LibertyPort::extPort() -> dbMTerm mapping, and avoids crashes when that
   // mapping is missing or stale after cell replacement.
-  const char* port_name = liberty_port->name();
-  if (port_name != nullptr) {
-    if (odb::dbITerm* iterm = inst_->findITerm(port_name)) {
+  const std::string& port_name = liberty_port->name();
+  if (!port_name.empty()) {
+    if (odb::dbITerm* iterm = inst_->findITerm(port_name.c_str())) {
       return iterm;
     }
   }
@@ -108,7 +114,7 @@ odb::dbITerm* OneBitScanCell::findITerm(sta::LibertyPort* liberty_port) const
   logger_->error(utl::DFT,
                  53,
                  "Failed to resolve scan ITerm '{}' on instance '{}'",
-                 port_name ? port_name : "<null>",
+                 !port_name.empty() ? port_name : "<null>",
                  inst_->getName());
   return nullptr;
 }

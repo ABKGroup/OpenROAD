@@ -338,7 +338,7 @@ TEST(TestScanArchitectHeuristic, ConflictingAssignmentsAcrossGroupThrows)
   TempConstraintsFile constraints(
       "chain c0\n"
       "chain c1\n"
-      "group g scan_cell0 scan_cell1\n"
+      "fixed_edge scan_cell0 scan_cell1\n"
       "assign c0 scan_cell0\n"
       "assign c1 scan_cell1\n");
   ASSERT_TRUE(config.loadScanOrderConstraintsFile(constraints.path(), logger));
@@ -472,6 +472,7 @@ TEST(TestScanArchitectHeuristic, PolarityBeforeConstraintThrows)
 
   ScanArchitectConfig config;
   config.setClockMixing(ScanArchitectConfig::ClockMixing::ClockMix);
+  config.setPolarityMode(ScanArchitectConfig::PolarityMode::Mid);
   config.setChainCount(1);
   config.setMaxLength(10);
 

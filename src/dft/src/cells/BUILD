@@ -31,6 +31,7 @@ cc_library(
         "//src/dbSta:dbNetwork",
         "//src/dft/src/clock_domain",
         "//src/dft/src/utils",
+        "//src/dft/src/config",
         "//src/odb/src/db",
         "//src/sta:opensta_lib",
         "//src/utl",

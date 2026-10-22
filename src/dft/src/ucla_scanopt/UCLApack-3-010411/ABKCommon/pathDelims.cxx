@@ -43,7 +43,7 @@ char * convertPathDelimsToWindows(char * fileName)
     unsigned i, len=strlen(fileName);
     for(i=0;i<len;i++)
         if (fileName[i]==pathDelimUnix) fileName[i]=pathDelimWindows;
-        return fileName;
+    return fileName;
 }
 
 char * convertPathDelimsToUnix   (char * fileName)
@@ -52,6 +52,6 @@ char * convertPathDelimsToUnix   (char * fileName)
     unsigned i, len=strlen(fileName);
     for(i=0;i<len;i++)
         if (fileName[i]==pathDelimWindows) fileName[i]=pathDelimUnix;
-        return fileName;
+    return fileName;
 }
 

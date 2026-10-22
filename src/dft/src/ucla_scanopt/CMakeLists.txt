@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026, The OpenROAD Authors
 
-set(UCLA_ROOT ${PROJECT_SOURCE_DIR}/third_party/UCLApack-3-010411)
+set(UCLA_ROOT ${CMAKE_CURRENT_LIST_DIR}/UCLApack-3-010411)
 
 add_library(dft_ucla_scanopt_lib
   UclaScanOpt.cc
